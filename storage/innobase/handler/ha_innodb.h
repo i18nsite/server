@@ -957,3 +957,27 @@ int innobase_recover_rollback_by_xid(const XID *xid);
   @return 0 or error number
 */
 void innobase_tc_log_recovery_done();
+
+/*************************************************************//**
+Set foreign key options
+@return true if successfully set */
+MY_ATTRIBUTE((nonnull, warn_unused_result))
+bool
+innobase_set_foreign_key_option(
+/*============================*/
+	dict_foreign_t*	foreign,	/*!< in:InnoDB Foreign key */
+	FK_info*	fk_key);	/*!< in: Foreign key info from
+					MySQL */
+
+dberr_t
+dict_load_foreigns(
+/*===============*/
+	THD*			thd,
+	dict_table_t*		table,
+	TABLE_SHARE*		share,
+	const char**		col_names,	/*!< in: column names, or NULL
+						to use table->col_names */
+	bool			check_charsets,	/*!< in: whether to check
+						charset compatibility */
+	dict_err_ignore_t	ignore_err)	/*!< in: error to be ignored */
+	MY_ATTRIBUTE((warn_unused_result));
