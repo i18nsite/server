@@ -34277,6 +34277,13 @@ bool Sql_cmd_dml::execute(THD *thd)
 
   MYSQL_DML_DONE(thd, res);
 
+  /* TODO: Sql_cmd_dml destructor */
+  if (result)
+  {
+    delete result;
+    result= NULL;
+  }
+
   return res;
 
 err:
