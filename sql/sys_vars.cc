@@ -2936,7 +2936,7 @@ export const char *optimizer_switch_names[]=
   "index_merge_intersection","index_merge_sort_intersection",
   "index_condition_pushdown",
   "derived_merge", "derived_with_keys",
-  "firstmatch","loosescan","materialization","in_to_exists","semijoin",
+  "firstmatch","loosescan","dupsweedout","materialization","in_to_exists","semijoin",
   "partial_match_rowid_merge",
   "partial_match_table_scan",
   "subquery_cache",

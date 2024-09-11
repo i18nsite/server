@@ -1,0 +1,298 @@
+CREATE TABLE t1 (a INTEGER NOT NULL, b INT, PRIMARY KEY (a));
+CREATE TABLE t2 (a INTEGER NOT NULL, KEY (a));
+CREATE TABLE t3 (a INTEGER NOT NULL, b INT, KEY (a));
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30),  (4,40);
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+INSERT INTO t3 VALUES (10,3), (20,4), (30,5);
+ANALYZE TABLE t1, t2, t3;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	Engine-independent statistics collected
+test.t1	analyze	status	OK
+test.t2	analyze	status	Engine-independent statistics collected
+test.t2	analyze	status	OK
+test.t3	analyze	status	Engine-independent statistics collected
+test.t3	analyze	status	OK
+# WIP:
+# Parser tests
+# Correct hints (no warnings):
+EXPLAIN EXTENDED
+SELECT /*+ SEMIJOIN() */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	select /*+ SEMIJOIN(@`select#1`) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ QB_NAME(qb1) SEMIJOIN(@qb1) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	select /*+ QB_NAME(`qb1`) SEMIJOIN(@`qb1`) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ QB_NAME(qb1) NO_SEMIJOIN(@qb1 firstmatch) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	select /*+ QB_NAME(`qb1`) NO_SEMIJOIN(@`qb1` FIRSTMATCH) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ QB_NAME(qb1) SEMIJOIN(  @qb1 firstmatch,  dupsweedout ) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	select /*+ QB_NAME(`qb1`) SEMIJOIN(@`qb1` FIRSTMATCH, DUPSWEEDOUT) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ NO_SEMIJOIN(  FIRSTMATCH, LOOSESCAN,materialization, DUPSWEEDOUT  ) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	select /*+ NO_SEMIJOIN(@`select#1` FIRSTMATCH, LOOSESCAN, MATERIALIZATION, DUPSWEEDOUT) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ QB_NAME(qb2) NO_SEMIJOIN(@qb2 FIRSTMATCH,LOOSESCAN, materialization, DUPSWEEDOUT) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	select /*+ QB_NAME(`qb2`) NO_SEMIJOIN(@`qb2` FIRSTMATCH, LOOSESCAN, MATERIALIZATION, DUPSWEEDOUT) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+set optimizer_switch='derived_merge=off';
+# Correct 'cause hints refer to different query blocks:
+EXPLAIN EXTENDED
+SELECT /*+ SEMIJOIN(@qb1) SEMIJOIN(loosescan)*/ a
+FROM (SELECT /*+ QB_NAME(qb1)*/ * FROM t2) AS tt;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	ALL	NULL	NULL	NULL	NULL	4	100.00	
+2	DERIVED	t2	index	NULL	a	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`qb1`) SEMIJOIN(@`select#1` LOOSESCAN) */ `tt`.`a` AS `a` from (/* select#2 */ select /*+ QB_NAME(`qb1`) */ `test`.`t2`.`a` AS `a` from `test`.`t2`) `tt`
+EXPLAIN EXTENDED
+SELECT /*+ SEMIJOIN()*/ a
+FROM (SELECT /*+ SEMIJOIN(loosescan)*/ * FROM t2) AS tt;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	ALL	NULL	NULL	NULL	NULL	4	100.00	
+2	DERIVED	t2	index	NULL	a	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`select#2` LOOSESCAN) SEMIJOIN(@`select#1`) */ `tt`.`a` AS `a` from (/* select#2 */ select `test`.`t2`.`a` AS `a` from `test`.`t2`) `tt`
+EXPLAIN EXTENDED
+SELECT /*+ SUBQUERY(materialization) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	select /*+ SUBQUERY(@`select#1` MATERIALIZATION) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ SUBQUERY( INTOEXISTS ) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	select /*+ SUBQUERY(@`select#1` INTOEXISTS) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ QB_NAME (qb1) SUBQUERY(@qb1   materialization) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Note	1003	select /*+ QB_NAME(`qb1`) SUBQUERY(@`qb1` MATERIALIZATION) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+# Incorrect hints (warnings)
+SELECT /*+ SEMIJOIN(loosescan @qb1) */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	1064	Optimizer hint syntax error near '@qb1) */ a FROM t1' at line 1
+SELECT /*+ SEMIJOIN(@qb1 @qb2) */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	1064	Optimizer hint syntax error near '@qb2) */ a FROM t1' at line 1
+SELECT /*+ SEMIJOIN(@qb1 LOOSESCAN,materialization, unknown_strategy) */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	1064	Optimizer hint syntax error near 'unknown_strategy) */ a FROM t1' at line 1
+SELECT /*+ NO_SEMIJOIN(@qb1, @qb2) */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	1064	Optimizer hint syntax error near ', @qb2) */ a FROM t1' at line 1
+SELECT /*+ NO_SEMIJOIN(FIRSTMATCH, ,LOOSESCAN, materialization) */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	1064	Optimizer hint syntax error near ',LOOSESCAN, materialization) */ a FROM t1' at line 1
+SELECT /*+ NO_SEMIJOIN(FIRSTMATCH, @qb2,LOOSESCAN) */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	1064	Optimizer hint syntax error near '@qb2,LOOSESCAN) */ a FROM t1' at line 1
+SELECT /*+ SUBQUERY(wrong_strat) */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	1064	Optimizer hint syntax error near 'wrong_strat) */ a FROM t1' at line 1
+SELECT /*+ SUBQUERY(materialization, intoexists) */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	1064	Optimizer hint syntax error near ', intoexists) */ a FROM t1' at line 1
+SELECT /*+ SUBQUERY(@qb1   materialization) */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	4203	Query block name `qb1` is not found for SUBQUERY hint
+SELECT /*+ SUBQUERY() */ a FROM t1;
+a
+1
+2
+3
+4
+Warnings:
+Warning	1064	Optimizer hint syntax error near ') */ a FROM t1' at line 1
+# Mix of correct and incorrect hints:
+EXPLAIN EXTENDED
+SELECT /*+ SEMIJOIN(firstmatch ) SEMIJOIN(loosescan @qb1) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	1064	Optimizer hint syntax error near '@qb1) */ a FROM t1' at line 2
+Note	1003	select `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ NO_SEMIJOIN(@qb1, @qb2) SEMIJOIN()*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	1064	Optimizer hint syntax error near ', @qb2) SEMIJOIN()*/ a FROM t1' at line 2
+Note	1003	select `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ NO_SEMIJOIN() NO_SEMIJOIN(FIRSTMATCH, @qb2,LOOSESCAN) */ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	1064	Optimizer hint syntax error near '@qb2,LOOSESCAN) */ a FROM t1' at line 2
+Note	1003	select `test`.`t1`.`a` AS `a` from `test`.`t1`
+# Conflicting hints:
+EXPLAIN EXTENDED
+SELECT /*+ SEMIJOIN() SEMIJOIN(dupsweedout) NO_SEMIJOIN(firstmatch)*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SEMIJOIN(DUPSWEEDOUT) is ignored as conflicting/duplicated
+Warning	4202	Hint NO_SEMIJOIN(FIRSTMATCH) is ignored as conflicting/duplicated
+Note	1003	select /*+ SEMIJOIN(@`select#1`) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ SEMIJOIN(loosescan,materialization) SEMIJOIN(dupsweedout)*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SEMIJOIN(DUPSWEEDOUT) is ignored as conflicting/duplicated
+Note	1003	select /*+ SEMIJOIN(@`select#1` LOOSESCAN, MATERIALIZATION) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ NO_SEMIJOIN(firstmatch,loosescan,materialization) SEMIJOIN() NO_SEMIJOIN()*/ a
+FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SEMIJOIN() is ignored as conflicting/duplicated
+Warning	4202	Hint NO_SEMIJOIN() is ignored as conflicting/duplicated
+Note	1003	select /*+ NO_SEMIJOIN(@`select#1` FIRSTMATCH, LOOSESCAN, MATERIALIZATION) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ QB_NAME(qb1) SEMIJOIN(@qb1) SEMIJOIN(loosescan) NO_SEMIJOIN(@qb1 dupsweedout)*/ a
+FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SEMIJOIN(LOOSESCAN) is ignored as conflicting/duplicated
+Warning	4202	Hint NO_SEMIJOIN(@`qb1` DUPSWEEDOUT) is ignored as conflicting/duplicated
+Note	1003	select /*+ QB_NAME(`qb1`) SEMIJOIN(@`qb1`) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED SELECT /*+ SEMIJOIN(firstmatch) NO_SEMIJOIN()*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint NO_SEMIJOIN() is ignored as conflicting/duplicated
+Note	1003	select /*+ SEMIJOIN(@`select#1` FIRSTMATCH) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ SUBQUERY(materialization) SUBQUERY(intoexists)*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SUBQUERY(INTOEXISTS) is ignored as conflicting/duplicated
+Note	1003	select /*+ SUBQUERY(@`select#1` MATERIALIZATION) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ SEMIJOIN() SUBQUERY(materialization) SUBQUERY(intoexists)*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SUBQUERY(MATERIALIZATION) is ignored as conflicting/duplicated
+Warning	4202	Hint SUBQUERY(INTOEXISTS) is ignored as conflicting/duplicated
+Note	1003	select /*+ SEMIJOIN(@`select#1`) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ SUBQUERY(materialization) SUBQUERY(intoexists)*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SUBQUERY(INTOEXISTS) is ignored as conflicting/duplicated
+Note	1003	select /*+ SUBQUERY(@`select#1` MATERIALIZATION) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ SUBQUERY(materialization) SUBQUERY(intoexists) SUBQUERY(materialization)*/ a
+FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SUBQUERY(INTOEXISTS) is ignored as conflicting/duplicated
+Warning	4202	Hint SUBQUERY(MATERIALIZATION) is ignored as conflicting/duplicated
+Note	1003	select /*+ SUBQUERY(@`select#1` MATERIALIZATION) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ SUBQUERY(materialization) SEMIJOIN(firstmatch) SUBQUERY(intoexists)*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SEMIJOIN(FIRSTMATCH) is ignored as conflicting/duplicated
+Warning	4202	Hint SUBQUERY(INTOEXISTS) is ignored as conflicting/duplicated
+Note	1003	select /*+ SUBQUERY(@`select#1` MATERIALIZATION) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ QB_NAME(qb1) SEMIJOIN(@qb1) SUBQUERY(@qb1 materialization) SUBQUERY(intoexists)*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SUBQUERY(@`qb1` MATERIALIZATION) is ignored as conflicting/duplicated
+Warning	4202	Hint SUBQUERY(INTOEXISTS) is ignored as conflicting/duplicated
+Note	1003	select /*+ QB_NAME(`qb1`) SEMIJOIN(@`qb1`) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+EXPLAIN EXTENDED
+SELECT /*+ QB_NAME(qb1) SUBQUERY(@qb1 materialization) SEMIJOIN(@qb1 firstmatch) SUBQUERY(intoexists)*/ a FROM t1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint SEMIJOIN(@`qb1` FIRSTMATCH) is ignored as conflicting/duplicated
+Warning	4202	Hint SUBQUERY(INTOEXISTS) is ignored as conflicting/duplicated
+Note	1003	select /*+ QB_NAME(`qb1`) SUBQUERY(@`qb1` MATERIALIZATION) */ `test`.`t1`.`a` AS `a` from `test`.`t1`
+set optimizer_switch='derived_merge=off';
+EXPLAIN EXTENDED
+SELECT /*+ SEMIJOIN(@qb1) SEMIJOIN(loosescan) NO_SEMIJOIN(@qb1 dupsweedout)*/ a
+FROM (SELECT /*+ QB_NAME(qb1)*/ * FROM t2) AS tt;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
+1	PRIMARY	<derived2>	ALL	NULL	NULL	NULL	NULL	4	100.00	
+2	DERIVED	t2	index	NULL	a	4	NULL	4	100.00	Using index
+Warnings:
+Warning	4202	Hint NO_SEMIJOIN(@`qb1` DUPSWEEDOUT) is ignored as conflicting/duplicated
+Note	1003	/* select#1 */ select /*+ SEMIJOIN(@`qb1`) SEMIJOIN(@`select#1` LOOSESCAN) */ `tt`.`a` AS `a` from (/* select#2 */ select /*+ QB_NAME(`qb1`) */ `test`.`t2`.`a` AS `a` from `test`.`t2`) `tt`
+DROP TABLE t1,t2,t3;

@@ -1566,6 +1566,9 @@ public:
   { 
     parsed_optimizer_hints= hl;
   }
+  // OLEGStodo: Item_exists_subselect::enum_exec_method subquery_strategy(THD *thd) const;
+  bool semijoin_enabled(THD *thd) const;
+  void update_semijoin_strategies(THD *thd);
 };
 typedef class st_select_lex SELECT_LEX;
 

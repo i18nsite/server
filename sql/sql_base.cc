@@ -8344,6 +8344,7 @@ bool setup_tables(THD *thd, Name_resolution_context *context,
     {
       if (setup_table_attributes(thd, table_list, first_select_table, tablenr))
         DBUG_RETURN(1);
+
       if (qb_hints &&                          // QB hints initialized
           !table_list->opt_hints_table)        // Table hints are not adjusted yet
       {

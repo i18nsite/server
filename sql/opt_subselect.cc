@@ -469,6 +469,7 @@ enum_nested_loop_state
 end_sj_materialize(JOIN *join, JOIN_TAB *join_tab, bool end_of_records);
 
 
+
 /*
   Check if Materialization strategy is allowed for given subquery predicate.
 
@@ -743,7 +744,7 @@ int check_and_do_in_subquery_rewrites(JOIN *join)
       yet. They are checked later in convert_join_subqueries_to_semijoins(),
       look for calls to block_conversion_to_sj().
     */
-    if (optimizer_flag(thd, OPTIMIZER_SWITCH_SEMIJOIN) &&
+    if (select_lex->semijoin_enabled(thd) &&
         in_subs &&                                                    // 1
         !select_lex->is_part_of_union() &&                            // 2
         !select_lex->group_list.elements && !join->order &&           // 3
@@ -3484,7 +3485,8 @@ bool Firstmatch_picker::check_qep(JOIN *join,
                                   POSITION *loose_scan_pos)
 {
   if (new_join_tab->emb_sj_nest &&
-      optimizer_flag(join->thd, OPTIMIZER_SWITCH_FIRSTMATCH) &&
+      (new_join_tab->emb_sj_nest->nested_join->sj_enabled_strategies &
+         OPTIMIZER_SWITCH_FIRSTMATCH) &&
       !join->outer_join)
   {
     const table_map outer_corr_tables=

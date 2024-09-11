@@ -19,7 +19,6 @@
 #include "sql_lex.h"
 #include "sql_select.h"
 #include "opt_hints.h"
-#include "opt_hints_parser.h"
 
 /**
   Information about hints. Sould be
@@ -40,6 +39,8 @@ struct st_opt_hint_info opt_hint_info[]=
   {{STRING_WITH_LEN("MRR")}, true, true},
   {{STRING_WITH_LEN("NO_RANGE_OPTIMIZATION")}, true, true},
   {{STRING_WITH_LEN("QB_NAME")}, false, false},
+  {{STRING_WITH_LEN("SEMIJOIN")}, false, false},
+  {{STRING_WITH_LEN("SUBQUERY")}, false, false},
   {null_clex_str, 0, 0}
 };
 
@@ -52,12 +53,15 @@ const LEX_CSTRING sys_qb_prefix=  {"select#", 7};
 
 static const Lex_ident_sys null_ident_sys;
 
+// OLEGS: make class member
+template<typename Hint_type>
 static
 void print_warn(THD *thd, uint err_code, opt_hints_enum hint_type,
                 bool hint_state,
                 const Lex_ident_sys *qb_name_arg,
                 const Lex_ident_sys *table_name_arg,
-                const Lex_ident_sys *key_name_arg)
+                const Lex_ident_sys *key_name_arg,
+                Hint_type *hint)
 {
   String str;
 
@@ -103,6 +107,15 @@ void print_warn(THD *thd, uint err_code, opt_hints_enum hint_type,
   {
     str.append(' ');
     append_identifier(thd, &str, key_name_arg->str, key_name_arg->length);
+  }
+
+  /* Append additional hint arguments if they exist */
+  if (hint)
+  {
+    if (qb_name_arg || table_name_arg || key_name_arg)
+      str.append(' ');
+
+    hint->append_args(thd, &str);
   }
 
   str.append(')');
@@ -184,7 +197,7 @@ static Opt_hints_qb *find_qb_hints(Parse_context *pc,
   if (qb == NULL)
   {
     print_warn(pc->thd, ER_WARN_UNKNOWN_QB_NAME, hint_type, hint_state,
-               &qb_name, NULL, NULL);
+               &qb_name, NULL, NULL, (Optimizer_hint_parser::Hint*) NULL);
   }
   return qb;
 }
@@ -252,7 +265,17 @@ void Opt_hints::print(THD *thd, String *str)
     {
       append_hint_type(str, static_cast<opt_hints_enum>(i));
       str->append(STRING_WITH_LEN("("));
+      uint32 len_before_name= str->length();
       append_name(thd, str);
+      uint32 len_after_name= str->length();
+      if (len_after_name > len_before_name)
+        str->append(' ');
+      append_args(thd, str);
+      if (str->length() == len_after_name + 1)
+      {
+        // No additional arguments were printed, trim the space added before
+        str->length(len_after_name);
+      }
       str->append(STRING_WITH_LEN(") "));
     }
   }
@@ -329,6 +352,58 @@ Opt_hints_table *Opt_hints_qb::adjust_table_hints(TABLE *table,
   tab->adjust_key_hints(table);
   return tab;
 }
+
+
+bool Opt_hints_qb::semijoin_enabled(THD *thd) const
+{
+  if (subquery_hint) // SUBQUERY hint disables semi-join
+    return false;
+
+  if (semijoin_hint)
+  {
+    // SEMIJOIN hint will always force semijoin regardless of optimizer_switch
+    if(get_switch(SEMIJOIN_HINT_ENUM))
+      return true;
+    
+    // NO_SEMIJOIN hint.  If strategy list is empty, do not use SEMIJOIN
+    if (semijoin_strategies_map == 0)
+      return false;
+
+    // Fall through: NO_SEMIJOIN w/ strategies neither turns SEMIJOIN off nor on
+  }
+
+  return optimizer_flag(thd, OPTIMIZER_SWITCH_SEMIJOIN);
+}
+
+
+uint Opt_hints_qb::sj_enabled_strategies(uint opt_switches) const
+{
+  // Hints override switches
+  if (semijoin_hint)
+  {
+    const uint strategies= semijoin_strategies_map;
+    if (get_switch(SEMIJOIN_HINT_ENUM))  // SEMIJOIN hint
+      return (strategies == 0) ? opt_switches : strategies;
+
+    // NO_SEMIJOIN hint. Hints and optimizer_switch both affect strategies
+    return ~strategies & opt_switches;
+  }
+
+  return opt_switches;
+}
+
+
+// OLEGS:
+// Item_exists_subselect::enum_exec_method
+// Opt_hints_qb::subquery_strategy() const
+// {
+//   if (subquery_hint)
+//     return static_cast<Item_exists_subselect::enum_exec_method>
+//       (subquery_hint->get_args());
+
+//   return Item_exists_subselect::EXEC_UNSPECIFIED;
+// }
+
 
 /*
   @brief
@@ -482,7 +557,15 @@ bool hint_table_state_or_fallback(const THD *thd, const TABLE *table,
   return fallback_value;
 }
 
+/*
+  Resolve a parsed table level hint, i.e. set up proper Opt_hint_* structures
+  which will be used later during query preparation and optimization.
 
+  Return value:
+  - false: no critical errors, warnings on duplicated hints,
+          unresolved query block names, etc. are allowed
+  - true: critical errors detected, break further hints processing
+*/
 bool Optimizer_hint_parser::Table_level_hint::resolve(Parse_context *pc) const
 {
   const Table_level_hint_type &table_level_hint_type= *this;
@@ -525,7 +608,8 @@ bool Optimizer_hint_parser::Table_level_hint::resolve(Parse_context *pc) const
       // e.g. BKA(@qb1)
       if (qb->set_switch(hint_state, hint_type, false))
         print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, hint_type, hint_state,
-                   &qb_name_sys, NULL, NULL);
+                   &qb_name_sys, nullptr, nullptr,
+                  (Optimizer_hint_parser::Hint*) nullptr);
       return false;
     }
     else
@@ -537,10 +621,11 @@ bool Optimizer_hint_parser::Table_level_hint::resolve(Parse_context *pc) const
         const Lex_ident_sys table_name_sys= table.to_ident_sys(pc->thd);
         Opt_hints_table *tab= get_table_hints(pc, table_name_sys, qb);
         if (!tab)
-          return true;
+          return false;
         if (tab->set_switch(hint_state, hint_type, true))
           print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, hint_type, hint_state,
-                     &qb_name_sys, &table_name_sys, NULL);
+                     &qb_name_sys, &table_name_sys, nullptr,
+                     (Optimizer_hint_parser::Hint*) nullptr);
       }
     }
   }
@@ -557,7 +642,8 @@ bool Optimizer_hint_parser::Table_level_hint::resolve(Parse_context *pc) const
       // e.g. BKA()
       if (qb->set_switch(hint_state, hint_type, false))
         print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, hint_type, hint_state,
-                   &null_ident_sys, NULL, NULL);
+                   &null_ident_sys, nullptr, nullptr,
+                   (Optimizer_hint_parser::Hint*) nullptr);
       return false;
     }
     for (const Table_name &table : table_name_list)
@@ -566,10 +652,11 @@ bool Optimizer_hint_parser::Table_level_hint::resolve(Parse_context *pc) const
       const Lex_ident_sys table_name_sys= table.to_ident_sys(pc->thd);
       Opt_hints_table *tab= get_table_hints(pc, table_name_sys, qb);
       if (!tab)
-        return true;
+        return false;
       if (tab->set_switch(hint_state, hint_type, true))
         print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, hint_type, hint_state,
-                   &null_ident_sys, &table_name_sys, NULL);
+                   &null_ident_sys, &table_name_sys, nullptr,
+                   (Optimizer_hint_parser::Hint*) nullptr);
     }
   
     for (const Hint_param_table &table : opt_hint_param_table_list)
@@ -584,16 +671,25 @@ bool Optimizer_hint_parser::Table_level_hint::resolve(Parse_context *pc) const
                                             to_ident_sys(pc->thd);
       Opt_hints_table *tab= get_table_hints(pc, table_name_sys, qb);
       if (!tab)
-        return true;
+        return false;
       if (tab->set_switch(hint_state, hint_type, true))
          print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, hint_type, hint_state,
-                    &qb_name_sys, &table_name_sys, NULL);
+                    &qb_name_sys, &table_name_sys, nullptr,
+                    (Optimizer_hint_parser::Hint*) nullptr);
     }
   }
   return false;
 }
 
+/*
+  Resolve a parsed index level hint, i.e. set up proper Opt_hint_* structures
+  which will be used later during query preparation and optimization.
 
+  Return value:
+  - false: no critical errors, warnings on duplicated hints,
+          unresolved query block names, etc. are allowed
+  - true: critical errors detected, break further hints processing
+*/
 bool Optimizer_hint_parser::Index_level_hint::resolve(Parse_context *pc) const
 {
   const Index_level_hint_type &index_level_hint_type= *this;
@@ -634,13 +730,14 @@ bool Optimizer_hint_parser::Index_level_hint::resolve(Parse_context *pc) const
 
   Opt_hints_table *tab= get_table_hints(pc, table_name_sys, qb);
   if (!tab)
-    return true;
+    return false;
   
   if (is_empty())  // Table level hint
   {
     if (tab->set_switch(hint_state, hint_type, false))
       print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, hint_type, hint_state,
-                 &qb_name_sys, &table_name_sys, NULL);
+                 &qb_name_sys, &table_name_sys, nullptr,
+                 (Optimizer_hint_parser::Hint*) nullptr);
     return false;
   }
 
@@ -657,13 +754,21 @@ bool Optimizer_hint_parser::Index_level_hint::resolve(Parse_context *pc) const
 
     if (idx->set_switch(hint_state, hint_type, true))
       print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, hint_type, hint_state,
-                 &qb_name_sys, &table_name_sys, &index_name_sys);
+                 &qb_name_sys, &table_name_sys, &index_name_sys,
+                 (Optimizer_hint_parser::Hint*) nullptr);
   }
-
   return false;
 }
 
+/*
+  Resolve a parsed query block name hint, i.e. set up proper Opt_hint_*
+  structures which will be used later during query preparation and optimization.
 
+  Return value:
+  - false: no critical errors, warnings on duplicated hints,
+          unresolved query block names, etc. are allowed
+  - true: critical errors detected, break further hints processing
+*/
 bool Optimizer_hint_parser::Qb_name_hint::resolve(Parse_context *pc) const
 {
   Opt_hints_qb *qb= pc->select->opt_hints_qb;
@@ -676,12 +781,284 @@ bool Optimizer_hint_parser::Qb_name_hint::resolve(Parse_context *pc) const
       qb->get_parent()->find_by_name(qb_name_sys)) // Name is already used
   {
     print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, QB_NAME_HINT_ENUM, true,
-               &qb_name_sys, NULL, NULL);
+               &qb_name_sys, nullptr, nullptr,
+               (Optimizer_hint_parser::Hint*) nullptr);
     return false;
   }
 
   qb->set_name(qb_name_sys);
   return false;
+}
+
+
+void Optimizer_hint_parser::Semijoin_hint::
+  fill_strategies_map(Opt_hints_qb *qb) const
+{
+  // Loop for hints like SEMIJOIN(firstmatch, dupsweedout)
+  const Hint_param_opt_sj_strategy_list &hint_param_strategy_list= *this;
+  for (const Semijoin_strategy &strat : hint_param_strategy_list)
+    add_strategy_to_map(strat.id(), qb);
+
+  // Loop for hints like SEMIJOIN(@qb1 firstmatch, dupsweedout)
+  const Opt_sj_strategy_list &opt_sj_strategy_list= *this;
+  for (const Semijoin_strategy &strat : opt_sj_strategy_list)
+    add_strategy_to_map(strat.id(), qb);
+}
+
+
+void Optimizer_hint_parser::Semijoin_hint::
+  add_strategy_to_map(TokenID token_id, Opt_hints_qb *qb) const
+{
+  switch(token_id)
+  {
+  case TokenID::keyword_DUPSWEEDOUT:
+    qb->semijoin_strategies_map |= OPTIMIZER_SWITCH_DUPSWEEDOUT;
+    break;
+  case TokenID::keyword_FIRSTMATCH:
+    qb->semijoin_strategies_map |= OPTIMIZER_SWITCH_FIRSTMATCH;
+    break;
+  case TokenID::keyword_LOOSESCAN:
+    qb->semijoin_strategies_map |= OPTIMIZER_SWITCH_LOOSE_SCAN;
+    break;
+  case TokenID::keyword_MATERIALIZATION:
+    qb->semijoin_strategies_map |= OPTIMIZER_SWITCH_MATERIALIZATION;
+    break;
+  default:
+    DBUG_ASSERT(0);
+  }
+}
+
+/*
+  Resolve a parsed semijoin hint, i.e. set up proper Opt_hint_* structures
+  which will be used later during query preparation and optimization.
+
+  Return value:
+  - false: no critical errors, warnings on duplicated hints,
+          unresolved query block names, etc. are allowed
+  - true: critical errors detected, break further hints processing
+*/
+bool Optimizer_hint_parser::Semijoin_hint::resolve(Parse_context *pc) const
+{
+  const Semijoin_hint_type &semijoin_hint_type= *this;
+  bool hint_state; // true - SEMIJOIN(), false - NO_SEMIJOIN()
+  if (semijoin_hint_type.id() == TokenID::keyword_SEMIJOIN)
+    hint_state= true;
+  else
+    hint_state= false;
+  Opt_hints_qb *qb;
+  if (const At_query_block_name_opt_strategy_list &
+         at_query_block_name_opt_strategy_list= *this)
+  {
+    /*
+      This is @ query_block_name opt_strategy_list,
+      e.g. SEMIJOIN(@qb1) or SEMIJOIN(@qb1 firstmatch, loosescan)
+    */
+    const Lex_ident_sys qb_name_sys= Query_block_name::to_ident_sys(pc->thd);
+    qb= find_qb_hints(pc, qb_name_sys, SEMIJOIN_HINT_ENUM, hint_state);
+    if (qb == NULL)
+      return false;
+    if (qb->subquery_hint)
+    {
+      print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, SEMIJOIN_HINT_ENUM,
+                 hint_state, &qb_name_sys, nullptr, nullptr, this);
+      return false;
+    }
+    if (qb->set_switch(hint_state, SEMIJOIN_HINT_ENUM, false))
+    {
+      print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, SEMIJOIN_HINT_ENUM,
+                 hint_state, &qb_name_sys, nullptr, nullptr, this);
+      return false;
+    }
+
+    if (at_query_block_name_opt_strategy_list.is_empty())
+    {
+      // e.g. SEMIJOIN(@qb1)
+      // OLEGS: not sure it's a correct way to assign all strats, double-check this
+      // qb->semijoin_strategies_map= OPTIMIZER_SWITCH_DUPSWEEDOUT |
+      //                              OPTIMIZER_SWITCH_FIRSTMATCH |
+      //                              OPTIMIZER_SWITCH_LOOSE_SCAN |
+      //                              OPTIMIZER_SWITCH_MATERIALIZATION;
+    }
+    else
+    {
+      // e.g. SEMIJOIN(@qb1 firstmatch, loosescan)
+      fill_strategies_map(qb);
+    }
+  }
+  else
+  {
+    //  This is opt_strategy_list, e.g. SEMIJOIN(loosescan, dupsweedout)
+    qb= find_qb_hints(pc, Lex_ident_sys(), SEMIJOIN_HINT_ENUM, hint_state);
+    if (qb == NULL)
+      return false;
+    if (qb->subquery_hint)
+    {
+      print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, SEMIJOIN_HINT_ENUM,
+                 hint_state, nullptr, nullptr, nullptr, this);
+      return false;
+    }
+    if (qb->set_switch(hint_state, SEMIJOIN_HINT_ENUM, false))
+    {
+      print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, SEMIJOIN_HINT_ENUM,
+                 hint_state, nullptr, nullptr, nullptr, this);
+      return false;
+    }
+    fill_strategies_map(qb);
+  }
+  qb->semijoin_hint= this;
+  return false;
+}
+
+
+void Optimizer_hint_parser::Semijoin_hint::
+  append_args(THD *thd, String *str) const
+{
+  int appended_count= 0;
+  // Loop for hints without query block name, e.g. SEMIJOIN(firstmatch, dupsweedout)
+  const Hint_param_opt_sj_strategy_list &hint_param_strategy_list= *this;
+  for (const Semijoin_strategy &strat : hint_param_strategy_list)
+    append_strategy_name(strat.id(), str, appended_count);
+
+  // Loop for hints with query block name, e.g. SEMIJOIN(@qb1 firstmatch, dupsweedout)
+  const Opt_sj_strategy_list &opt_sj_strategy_list= *this;
+  for (const Semijoin_strategy &strat : opt_sj_strategy_list)
+    append_strategy_name(strat.id(), str, appended_count);
+}
+
+
+void Optimizer_hint_parser::Semijoin_hint::
+  append_strategy_name(TokenID token_id, String *str, int& appended_count) const
+{
+  if (appended_count > 0)
+    str->append(STRING_WITH_LEN(", "));
+  switch(token_id)
+  {
+  case TokenID::keyword_DUPSWEEDOUT:
+    str->append(STRING_WITH_LEN("DUPSWEEDOUT"));
+    break;
+  case TokenID::keyword_FIRSTMATCH:
+    str->append(STRING_WITH_LEN("FIRSTMATCH"));
+    break;
+  case TokenID::keyword_LOOSESCAN:
+    str->append(STRING_WITH_LEN("LOOSESCAN"));
+    break;
+  case TokenID::keyword_MATERIALIZATION:
+    str->append(STRING_WITH_LEN("MATERIALIZATION"));
+    break;
+  default:
+    DBUG_ASSERT(0);
+  }
+  appended_count++;
+}
+
+/*
+  Resolve a parsed subquery hint, i.e. set up proper Opt_hint_* structures
+  which will be used later during query preparation and optimization.
+
+  Return value:
+  - false: no critical errors, warnings on duplicated hints,
+          unresolved query block names, etc. are allowed
+  - true: critical errors detected, break further hints processing
+*/
+bool Optimizer_hint_parser::Subquery_hint::resolve(Parse_context *pc) const
+{
+  Opt_hints_qb *qb;
+  if (const At_query_block_name_subquery_strategy &
+         at_query_block_name_subquery_strategy= *this)
+  {
+    /*
+      This is @ query_block_name subquery_strategy,
+      e.g. SUBQUERY(@qb1 INTOEXISTS)
+    */
+    const Lex_ident_sys qb_name_sys= Query_block_name::to_ident_sys(pc->thd);
+    qb= find_qb_hints(pc, qb_name_sys, SUBQUERY_HINT_ENUM, true);
+    if (qb == NULL)
+      return false;
+    if (qb->semijoin_hint)
+    {
+      print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, SUBQUERY_HINT_ENUM,
+                 true, &qb_name_sys, nullptr, nullptr, this);
+      return false;
+    }
+    if (qb->set_switch(true, SUBQUERY_HINT_ENUM, false))
+    {
+      print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, SUBQUERY_HINT_ENUM,
+                 true, &qb_name_sys, nullptr, nullptr, this);
+      return false;
+    }
+    const Subquery_strategy &strat= at_query_block_name_subquery_strategy;
+    set_subquery_strategy(strat.id(), qb);
+  }
+  else
+  {
+    //  This is subquery_strategy, e.g. SUBQUERY(MATERIALIZATION)
+    qb= find_qb_hints(pc, Lex_ident_sys(), SUBQUERY_HINT_ENUM, true);
+    if (qb == NULL)
+      return false;
+    if (qb->semijoin_hint)
+    {
+      print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, SUBQUERY_HINT_ENUM,
+                 true, nullptr, nullptr, nullptr, this);
+      return false;
+    }
+    if (qb->set_switch(true, SUBQUERY_HINT_ENUM, false))
+    {
+      print_warn(pc->thd, ER_WARN_CONFLICTING_HINT, SUBQUERY_HINT_ENUM,
+                 true, nullptr, nullptr, nullptr, this);
+      return false;
+    }
+    const Hint_param_subquery_strategy &strat= *this;
+    set_subquery_strategy(strat.id(), qb);
+  }
+  qb->subquery_hint= this;
+  return false;
+}
+
+
+void Optimizer_hint_parser::Subquery_hint::
+  set_subquery_strategy(TokenID token_id, Opt_hints_qb *qb) const
+{
+  switch(token_id)
+  {
+  case TokenID::keyword_INTOEXISTS:
+    qb->subquery_strategy= SUBS_IN_TO_EXISTS;
+    break;
+  case TokenID::keyword_MATERIALIZATION:
+    qb->subquery_strategy= SUBS_MATERIALIZATION;
+    break;
+  default:
+    DBUG_ASSERT(0);
+  }
+}
+
+
+void Optimizer_hint_parser::Subquery_hint::
+  append_args(THD *thd, String *str) const
+{
+  TokenID token_id;
+  if (const At_query_block_name_subquery_strategy &
+         at_query_block_name_subquery_strategy= *this)
+  {
+    const Subquery_strategy &strat= at_query_block_name_subquery_strategy;
+    token_id= strat.id();
+  }
+  else
+  {
+    const Hint_param_subquery_strategy& hint_param_strat= *this;
+    token_id= hint_param_strat.id();
+  }
+
+  switch(token_id)
+  {
+  case TokenID::keyword_INTOEXISTS:
+    str->append(STRING_WITH_LEN("INTOEXISTS"));
+    break;
+  case TokenID::keyword_MATERIALIZATION:
+    str->append(STRING_WITH_LEN("MATERIALIZATION"));
+    break;
+  default:
+    DBUG_ASSERT(0);
+  }
 }
 
 
@@ -716,6 +1093,19 @@ bool Optimizer_hint_parser::Hint_list::resolve(Parse_context *pc)
     {
       if (qb_hint.resolve(pc))
         return true;
+    }
+    else if (const Semijoin_hint &sj_hint= *hint)
+    {
+      if (sj_hint.resolve(pc))
+        return true;
+    }
+    else if (const Subquery_hint &subq_hint= *hint)
+    {
+      if (subq_hint.resolve(pc))
+        return true;
+    }
+    else {
+      DBUG_ASSERT(0);
     }
   }
   return false;

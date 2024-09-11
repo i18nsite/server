@@ -1,0 +1,157 @@
+CREATE TABLE t1 (a INTEGER NOT NULL, b INT, PRIMARY KEY (a));
+CREATE TABLE t2 (a INTEGER NOT NULL, KEY (a));
+CREATE TABLE t3 (a INTEGER NOT NULL, b INT, KEY (a));
+INSERT INTO t1 VALUES (1,10), (2,20), (3,30),  (4,40);
+INSERT INTO t2 VALUES (2), (3), (4), (5);
+INSERT INTO t3 VALUES (10,3), (20,4), (30,5);
+
+ANALYZE TABLE t1, t2, t3;
+
+--echo # Parser tests
+--echo # Correct hints (no warnings):
+EXPLAIN EXTENDED
+  SELECT /*+ SEMIJOIN() */ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ QB_NAME(qb1) SEMIJOIN(@qb1) */ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ QB_NAME(qb1) NO_SEMIJOIN(@qb1 firstmatch) */ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ QB_NAME(qb1) SEMIJOIN(  @qb1 firstmatch,  dupsweedout ) */ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ NO_SEMIJOIN(  FIRSTMATCH, LOOSESCAN,materialization, DUPSWEEDOUT  ) */ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ QB_NAME(qb2) NO_SEMIJOIN(@qb2 FIRSTMATCH,LOOSESCAN, materialization, DUPSWEEDOUT) */ a FROM t1;
+
+set optimizer_switch='derived_merge=off';
+--echo # Correct 'cause hints refer to different query blocks:
+EXPLAIN EXTENDED
+  SELECT /*+ SEMIJOIN(@qb1) SEMIJOIN(loosescan)*/ a
+  FROM (SELECT /*+ QB_NAME(qb1)*/ * FROM t2) AS tt;
+EXPLAIN EXTENDED
+  SELECT /*+ SEMIJOIN()*/ a
+  FROM (SELECT /*+ SEMIJOIN(loosescan)*/ * FROM t2) AS tt;
+
+EXPLAIN EXTENDED
+  SELECT /*+ SUBQUERY(materialization) */ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ SUBQUERY( INTOEXISTS ) */ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ QB_NAME (qb1) SUBQUERY(@qb1   materialization) */ a FROM t1;
+
+--echo # Incorrect hints (warnings)
+SELECT /*+ SEMIJOIN(loosescan @qb1) */ a FROM t1;
+SELECT /*+ SEMIJOIN(@qb1 @qb2) */ a FROM t1;
+SELECT /*+ SEMIJOIN(@qb1 LOOSESCAN,materialization, unknown_strategy) */ a FROM t1;
+SELECT /*+ NO_SEMIJOIN(@qb1, @qb2) */ a FROM t1;
+SELECT /*+ NO_SEMIJOIN(FIRSTMATCH, ,LOOSESCAN, materialization) */ a FROM t1;
+SELECT /*+ NO_SEMIJOIN(FIRSTMATCH, @qb2,LOOSESCAN) */ a FROM t1;
+SELECT /*+ SUBQUERY(wrong_strat) */ a FROM t1;
+SELECT /*+ SUBQUERY(materialization, intoexists) */ a FROM t1;
+SELECT /*+ SUBQUERY(@qb1   materialization) */ a FROM t1;
+SELECT /*+ SUBQUERY() */ a FROM t1;
+
+--echo # Mix of correct and incorrect hints:
+EXPLAIN EXTENDED
+  SELECT /*+ SEMIJOIN(firstmatch ) SEMIJOIN(loosescan @qb1) */ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ NO_SEMIJOIN(@qb1, @qb2) SEMIJOIN()*/ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ NO_SEMIJOIN() NO_SEMIJOIN(FIRSTMATCH, @qb2,LOOSESCAN) */ a FROM t1;
+
+--echo # Conflicting hints:
+EXPLAIN EXTENDED
+  SELECT /*+ SEMIJOIN() SEMIJOIN(dupsweedout) NO_SEMIJOIN(firstmatch)*/ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ SEMIJOIN(loosescan,materialization) SEMIJOIN(dupsweedout)*/ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ NO_SEMIJOIN(firstmatch,loosescan,materialization) SEMIJOIN() NO_SEMIJOIN()*/ a
+  FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ QB_NAME(qb1) SEMIJOIN(@qb1) SEMIJOIN(loosescan) NO_SEMIJOIN(@qb1 dupsweedout)*/ a
+  FROM t1;
+EXPLAIN EXTENDED SELECT /*+ SEMIJOIN(firstmatch) NO_SEMIJOIN()*/ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ SUBQUERY(materialization) SUBQUERY(intoexists)*/ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ SEMIJOIN() SUBQUERY(materialization) SUBQUERY(intoexists)*/ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ SUBQUERY(materialization) SUBQUERY(intoexists)*/ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ SUBQUERY(materialization) SUBQUERY(intoexists) SUBQUERY(materialization)*/ a
+  FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ SUBQUERY(materialization) SEMIJOIN(firstmatch) SUBQUERY(intoexists)*/ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ QB_NAME(qb1) SEMIJOIN(@qb1) SUBQUERY(@qb1 materialization) SUBQUERY(intoexists)*/ a FROM t1;
+EXPLAIN EXTENDED
+  SELECT /*+ QB_NAME(qb1) SUBQUERY(@qb1 materialization) SEMIJOIN(@qb1 firstmatch) SUBQUERY(intoexists)*/ a FROM t1;
+
+set optimizer_switch='derived_merge=off';
+EXPLAIN EXTENDED
+  SELECT /*+ SEMIJOIN(@qb1) SEMIJOIN(loosescan) NO_SEMIJOIN(@qb1 dupsweedout)*/ a
+  FROM (SELECT /*+ QB_NAME(qb1)*/ * FROM t2) AS tt;
+
+DROP TABLE t1, t2 ,t3;
+
+CREATE TABLE t1 (pk INTEGER PRIMARY KEY, i INTEGER NOT NULL);
+INSERT INTO t1 VALUES (11,0);
+INSERT INTO t1 VALUES (12,5);
+INSERT INTO t1 VALUES (15,0);
+CREATE TABLE t2 (pk INTEGER PRIMARY KEY, i INTEGER NOT NULL);
+INSERT INTO t2 VALUES (11,1);
+INSERT INTO t2 VALUES (12,2);
+INSERT INTO t2 VALUES (15,4);
+
+--echo # This query will normally use FirstMatch semijoin strategy
+EXPLAIN SELECT * FROM t1 WHERE pk IN (SELECT it.pk FROM t2 JOIN t2 AS it);
+--echo # Check that we can disable SEMIJOIN transformation
+EXPLAIN EXTENDED SELECT * FROM t1 WHERE pk IN
+  (SELECT /*+ NO_SEMIJOIN() */it.pk FROM t2 JOIN t2 AS it);
+--echo Same with hint in outer query
+EXPLAIN EXTENDED SELECT /*+ NO_SEMIJOIN(@subq) */ * FROM t1 WHERE pk IN
+  (SELECT /*+ QB_NAME(subq) */it.pk FROM t2 JOIN t2 AS it);
+
+--echo Query with two sub-queries
+EXPLAIN SELECT * FROM t1
+  WHERE pk IN (SELECT it.pk FROM t2 JOIN t2 AS it)
+     AND i IN (SELECT it.pk FROM t2 JOIN t2 AS it);
+--echo No SEMIJOIN transformation for first subquery
+EXPLAIN SELECT * FROM t1
+  WHERE pk IN (SELECT /*+ NO_SEMIJOIN()*/ it.pk FROM t2 JOIN t2 AS it)
+     AND i IN (SELECT it.pk FROM t2 JOIN t2 AS it);
+EXPLAIN SELECT /*+ NO_SEMIJOIN(@subq1) */* FROM t1
+  WHERE pk IN (SELECT /*+ QB_NAME(`subq1`) */ it.pk FROM t2 JOIN t2 AS it)
+     AND i IN (SELECT /*+ QB_NAME(subq2) */ it.pk FROM t2 JOIN t2 AS it);
+--echo No SEMIJOIN transformation for the latter subquery
+EXPLAIN SELECT * FROM t1
+  WHERE pk IN (SELECT it.pk FROM t2 JOIN t2 AS it)
+     AND i IN (SELECT /*+ NO_SEMIJOIN()*/ it.pk FROM t2 JOIN t2 AS it);
+EXPLAIN SELECT /*+ NO_SEMIJOIN(@`subq2`) */ * FROM t1
+  WHERE pk IN (SELECT /*+ QB_NAME(subq1) */ it.pk FROM t2 JOIN t2 AS it)
+     AND i IN (SELECT /*+ QB_NAME(subq2) */ it.pk FROM t2 JOIN t2 AS it);
+--echo No SEMIJOIN transformation for any subquery
+EXPLAIN SELECT * FROM t1
+  WHERE pk IN (SELECT /*+ NO_SEMIJOIN()*/ it.pk FROM t2 JOIN t2 AS it)
+     AND i IN (SELECT /*+ NO_SEMIJOIN()*/ it.pk FROM t2 JOIN t2 AS it);
+EXPLAIN SELECT /*+ NO_SEMIJOIN(@subq1) NO_SEMIJOIN(@subq2) */ * FROM t1
+  WHERE pk IN (SELECT /*+ QB_NAME(subq1) */ it.pk FROM t2 JOIN t2 AS it)
+     AND i IN (SELECT /*+ QB_NAME(subq2) */ it.pk FROM t2 JOIN t2 AS it);
+
+CREATE TABLE t3 (a INTEGER NOT NULL, b INT, KEY (a));
+INSERT INTO t3 VALUES (10,3), (20,4), (30,5);
+
+--echo Query with nested sub-queries. Normally the inner-most query will be SJ-transformed
+EXPLAIN SELECT * FROM t3
+  WHERE a IN (SELECT /*+ QB_NAME(subq1) */ pk FROM t1
+              WHERE pk IN (SELECT /*+ QB_NAME(subq2) */ it.pk FROM t2 JOIN t2 AS it));
+--echo No SEMIJOIN transformation for inner-most subquery
+EXPLAIN SELECT /*+ NO_SEMIJOIN(@subq2)*/ * FROM t3
+  WHERE a IN (SELECT /*+ QB_NAME(subq1) */ pk FROM t1
+              WHERE pk IN (SELECT /*+ QB_NAME(subq2) */ it.pk FROM t2 JOIN t2 AS it));
+
+EXPLAIN SELECT * FROM t3 WHERE a IN (SELECT pk FROM t1
+              WHERE pk IN (SELECT /*+ NO_SEMIJOIN()*/ it.pk FROM t2 JOIN t2 AS it));
+
+DROP TABLE t1,t2,t3;
+
+

@@ -443,6 +443,92 @@ protected:
 
 
   /*
+     A rule consisting of a choice of four rules:
+        rule ::= rule1 | rule2 | rule3 | rule4
+     For the case when the four branches have incompatible storage
+  */
+  template<class PARSER, class A, class B, class C, class D>
+  class OR4: public A, public B, public C, public D
+  {
+  public:
+    OR4()
+    { }
+    OR4(OR4 &&rhs)
+     :A(std::move(static_cast<A&&>(rhs))),
+      B(std::move(static_cast<B&&>(rhs))),
+      C(std::move(static_cast<C&&>(rhs))),
+      D(std::move(static_cast<D&&>(rhs)))
+    { }
+    OR4 & operator=(OR4 &&rhs)
+    {
+      A::operator=(std::move(static_cast<A&&>(rhs)));
+      B::operator=(std::move(static_cast<B&&>(rhs)));
+      C::operator=(std::move(static_cast<C&&>(rhs)));
+      D::operator=(std::move(static_cast<D&&>(rhs)));
+      return *this;
+    }
+    OR4(PARSER *p)
+     :A(p),
+      B(A::operator bool() ? B() : B(p)),
+      C(A::operator bool() || B::operator bool() ? C() : C(p)),
+      D(A::operator bool() || B::operator bool() || C::operator bool() ?
+          D() : D(p))
+    {
+      DBUG_ASSERT(!operator bool() || !p->is_error());
+    }
+    operator bool() const
+    {
+      return A::operator bool() || B::operator bool() || C::operator bool() ||
+             D::operator bool();
+    }
+  };
+
+  /*
+     A rule consisting of a choice of five rules:
+        rule ::= rule1 | rule2 | rule3 | rule4 | rule5
+  */
+  template<class PARSER, class A, class B, class C, class D, class E>
+  class OR5: public A, public B, public C, public D, public E
+  {
+  public:
+    OR5()
+    { }
+    OR5(OR5 &&rhs)
+     :A(std::move(static_cast<A&&>(rhs))),
+      B(std::move(static_cast<B&&>(rhs))),
+      C(std::move(static_cast<C&&>(rhs))),
+      D(std::move(static_cast<D&&>(rhs))),
+      E(std::move(static_cast<E&&>(rhs)))
+    { }
+    OR5 & operator=(OR5 &&rhs)
+    {
+      A::operator=(std::move(static_cast<A&&>(rhs)));
+      B::operator=(std::move(static_cast<B&&>(rhs)));
+      C::operator=(std::move(static_cast<C&&>(rhs)));
+      D::operator=(std::move(static_cast<D&&>(rhs)));
+      E::operator=(std::move(static_cast<E&&>(rhs)));
+      return *this;
+    }
+    OR5(PARSER *p)
+     :A(p),
+      B(A::operator bool() ? B() : B(p)),
+      C(A::operator bool() || B::operator bool() ? C() : C(p)),
+      D(A::operator bool() || B::operator bool() || C::operator bool() ?
+          D() : D(p)),
+      E(A::operator bool() || B::operator bool() || C::operator bool() ||
+        D::operator bool() ? E() : E(p))
+    {
+      DBUG_ASSERT(!operator bool() || !p->is_error());
+    }
+    operator bool() const
+    {
+      return A::operator bool() || B::operator bool() || C::operator bool() ||
+             D::operator bool() || E::operator bool();
+    }
+  };
+
+
+  /*
     A list with at least MIN_COUNT elements (typlically 0 or 1),
     with or without a token separator between elements:
 

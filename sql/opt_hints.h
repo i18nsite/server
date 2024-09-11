@@ -30,6 +30,7 @@
 #include "sql_bitmap.h"
 #include "sql_show.h"
 #include "mysqld_error.h"
+#include "opt_hints_parser.h"
 
 
 struct LEX;
@@ -48,7 +49,9 @@ enum opt_hints_enum
   MRR_HINT_ENUM,
   NO_RANGE_HINT_ENUM,
   QB_NAME_HINT_ENUM,
-  MAX_HINT_ENUM
+  SEMIJOIN_HINT_ENUM,
+  SUBQUERY_HINT_ENUM,
+  MAX_HINT_ENUM // This one must be the last in the list
 };
 
 
@@ -261,6 +264,13 @@ public:
   void check_unresolved(THD *thd);
   virtual void append_name(THD *thd, String *str)= 0;
 
+  /**
+    Append additional hint arguments to the printed string if they exist.
+    For example, SEMIJOIN and SUBQUERY hints may have a list of strategies
+    as additional arguments
+  */
+  virtual void append_args(THD *thd, String *str) const {}
+
   virtual ~Opt_hints() {}
 
 private:
@@ -316,7 +326,6 @@ class Opt_hints_qb : public Opt_hints
   char buff[32];          // Buffer to hold sys name
 
 public:
-
   Opt_hints_qb(Opt_hints *opt_hints_arg,
                MEM_ROOT *mem_root_arg,
                uint select_number_arg);
@@ -354,6 +363,14 @@ public:
     append_identifier(thd, str, &print_name);
   }
 
+  virtual void append_args(THD *thd, String *str) const override
+  {
+    if (semijoin_hint)
+      semijoin_hint->append_args(thd, str);
+    if (subquery_hint)
+      subquery_hint->append_args(thd, str);
+  }
+
   /**
     Function finds Opt_hints_table object corresponding to
     table alias in the query block and attaches corresponding
@@ -367,6 +384,54 @@ public:
   */
   Opt_hints_table *adjust_table_hints(TABLE *table,
                                       const Lex_ident_table &alias);
+
+  /**
+    Returns whether semi-join is enabled for this query block
+
+    A SEMIJOIN hint will force semi-join regardless of optimizer_switch settings.
+    A NO_SEMIJOIN hint will only turn off semi-join if the variant with no
+    strategies is used.
+    A SUBQUERY hint will turn off semi-join.
+    If there is no SEMIJOIN/SUBQUERY hint, optimizer_switch setting determines
+    whether SEMIJOIN is used.
+
+    @param thd  Pointer to THD object for session.
+                Used to access optimizer_switch
+
+    @return true if semijoin is enabled
+  */
+  bool semijoin_enabled(THD *thd) const;
+
+  /**
+    Returns bit mask of which semi-join strategies are enabled for this query
+    block.
+
+    @param opt_switches Bit map of strategies enabled by optimizer_switch
+
+    @return Bit mask of strategies that are enabled
+  */
+  uint sj_enabled_strategies(uint opt_switches) const;
+
+  /**
+    Returns which subquery execution strategy has been specified by hints
+    for this query block.
+
+    @retval EXEC_MATERIALIZATION  Subquery Materialization should be used
+    @retval EXEC_EXISTS In-to-exists execution should be used
+    @retval EXEC_UNSPECIFIED No SUBQUERY hint for this query block
+  */
+  // OLEGS todo: Item_exists_subselect::enum_exec_method subquery_strategy() const;
+
+  const Optimizer_hint_parser::Semijoin_hint* semijoin_hint= nullptr;
+
+  /*
+    Bitmap of strategies listed in the SEMIJOIN/NO_SEMIJOIN hint body, e.g.
+    FIRSTMATCH | LOOSESCAN
+  */
+  uint semijoin_strategies_map= 0;
+
+  const Optimizer_hint_parser::Subquery_hint *subquery_hint= nullptr;
+  uint subquery_strategy= 0;
 };
 
 

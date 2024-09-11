@@ -25,6 +25,7 @@
 #include "simple_parser.h"
 
 class st_select_lex;
+class Opt_hints_qb;
 
 /**
   Environment data for the name resolution phase
@@ -72,6 +73,14 @@ public:
     keyword_NO_RANGE_OPTIMIZATION,
     keyword_MRR,
     keyword_QB_NAME,
+    keyword_SEMIJOIN,
+    keyword_NO_SEMIJOIN,
+    keyword_SUBQUERY,
+    keyword_MATERIALIZATION,
+    keyword_FIRSTMATCH,
+    keyword_LOOSESCAN,
+    keyword_DUPSWEEDOUT,
+    keyword_INTOEXISTS,
 
     // Other token types
     tIDENT
@@ -240,6 +249,12 @@ private:
     using TOKEN::TOKEN;
   };
 
+  class Keyword_SUBQUERY: public TOKEN<PARSER, TokenID::keyword_SUBQUERY>
+  {
+  public:
+    using TOKEN::TOKEN;
+  };
+
   class Identifier: public TOKEN<PARSER, TokenID::tIDENT>
   {
   public:
@@ -312,9 +327,7 @@ private:
     using TokenChoice::TokenChoice;
   };
 
-
   // Identifiers of various kinds
-
 
   // query_block_name ::= identifier
   class Query_block_name: public Identifier
@@ -554,21 +567,224 @@ private:
   };
 
 
+  // semijoin_hint_type ::= SEMIJOIN | NO_SEMIJOIN
+  class Semijoin_hint_type_cond
+  {
+  public:
+    static bool allowed_token_id(TokenID id)
+    {
+      return id == TokenID::keyword_SEMIJOIN ||
+             id == TokenID::keyword_NO_SEMIJOIN;
+    }
+  };
+  class Semijoin_hint_type: public TokenChoice<PARSER,
+                                               Semijoin_hint_type_cond>
+  {
+  public:
+    using TokenChoice::TokenChoice;
+  };
+
+
+  // semijoin_strategy ::= MATERIALIZATION | FIRSTMATCH | LOOSESCAN | DUPSWEEDOUT
+  class Semijoin_strategy_cond
+  {
+  public:
+    static bool allowed_token_id(TokenID id)
+    {
+      return id == TokenID::keyword_MATERIALIZATION ||
+             id == TokenID::keyword_FIRSTMATCH ||
+             id == TokenID::keyword_LOOSESCAN ||
+             id == TokenID::keyword_DUPSWEEDOUT;
+    }
+  };
+
+  class Semijoin_strategy: public TokenChoice<PARSER, Semijoin_strategy_cond>
+  {
+  public:
+    using TokenChoice::TokenChoice;
+  };
+
+
+
+  /*
+    strategy_list ::= strategy_name [ {, strategy_name }... ]
+    opt_strategy_list ::= [ strategy_list ]
+  */
+  class Semijoin_strategy_list_container: public List<Semijoin_strategy>
+  {
+  public:
+    Semijoin_strategy_list_container()
+    { }
+    bool add(Optimizer_hint_parser *p, Semijoin_strategy &&strategy);
+    size_t count() const { return elements; }
+  };
+
+  class Opt_sj_strategy_list: public LIST<PARSER,
+                                       Semijoin_strategy_list_container,
+                                       Semijoin_strategy, TokenID::tCOMMA, 0>
+  {
+  public:
+    using LIST::LIST;
+  };
+
+
+  class Hint_param_opt_sj_strategy_list: public LIST<PARSER,
+                                       Semijoin_strategy_list_container,
+                                       Semijoin_strategy, TokenID::tCOMMA, 0>
+  {
+  public:
+    using LIST::LIST;
+  };
+
+
+  /*
+    at_query_block_name_opt_strategies_list ::=
+      @ query_block_name opt_strategies_list
+  */
+  class At_query_block_name_opt_strategy_list: public AND2<
+                                                    PARSER,
+                                                    At_query_block_name,
+                                                    Opt_sj_strategy_list>
+  {
+  public:
+    using AND2::AND2;
+  };
+
+  /*
+    semijoin_hint_body:   @ query_block_name opt_sj_strategy_list
+                           | opt_sj_strategy_list
+  */
+  class Semijoin_hint_body: public OR2<PARSER,
+                                       At_query_block_name_opt_strategy_list,
+                                       Hint_param_opt_sj_strategy_list>
+  {
+  public:
+    using OR2::OR2;
+  };
+
+public:
+  /*
+    semijoin_hint ::= semijoin_hint_type ( semijoin_hint_body )
+  */
+  class Semijoin_hint: public AND4<PARSER,
+                                   Semijoin_hint_type,
+                                   LParen,
+                                   Semijoin_hint_body,
+                                   RParen>
+  {
+  public:
+    using AND4::AND4;
+
+    bool resolve(Parse_context *pc) const;
+    void append_args(THD *thd, String *str) const;
+
+  private:
+    void fill_strategies_map(Opt_hints_qb *qb) const;
+    void add_strategy_to_map(TokenID token_id, Opt_hints_qb *qb) const;
+    void append_strategy_name(TokenID token_id, String *str,
+                              int& appended_count) const;
+  };
+
+private:
+  // subquery_strategy ::= MATERIALIZATION | INTOEXISTS
+  class Subquery_strategy_cond
+  {
+  public:
+    static bool allowed_token_id(TokenID id)
+    {
+      return id == TokenID::keyword_MATERIALIZATION ||
+             id == TokenID::keyword_INTOEXISTS;
+    }
+  };
+
+  class Subquery_strategy: public TokenChoice<PARSER, Subquery_strategy_cond>
+  {
+  public:
+    using TokenChoice::TokenChoice;
+  };
+
+  class Hint_param_subquery_strategy: public TokenChoice<PARSER,
+                                                         Subquery_strategy_cond>
+  {
+  public:
+    using TokenChoice::TokenChoice;
+  };
+
+
+  /*
+    at_query_block_name_subquery_strategy ::=
+      @ query_block_name subquery_strategy
+  */
+  class At_query_block_name_subquery_strategy: public AND2<
+                                                    PARSER,
+                                                    At_query_block_name,
+                                                    Subquery_strategy>
+  {
+  public:
+    using AND2::AND2;
+  };
+
+
+  /*
+    subquery_hint_body:   @ query_block_name subquery_strategy
+                           | subquery_strategy
+  */
+  class Subquery_hint_body: public OR2<PARSER,
+                                       At_query_block_name_subquery_strategy,
+                                       Hint_param_subquery_strategy>
+  {
+  public:
+    using OR2::OR2;
+  };
+
+
+public:
+  // subquery_hint ::= SUBQUERY( subquery_hint_body )
+  class Subquery_hint: public AND4<PARSER,
+                                  Keyword_SUBQUERY,
+                                  LParen,
+                                  Subquery_hint_body,
+                                  RParen>
+  {
+  public:
+    using AND4::AND4;
+
+    bool resolve(Parse_context *pc) const;
+    void append_args(THD *thd, String *str) const;
+
+  private:
+    void set_subquery_strategy(TokenID token_id, Opt_hints_qb *qb) const;
+  };
+
+
   /*
     hint ::=   index_level_hint
              | table_level_hint
              | qb_name_hint
+             | qb_level_hint
   */
-  class Hint: public OR3<PARSER,
+  class Hint: public OR5<PARSER,
                          Index_level_hint,
                          Table_level_hint,
-                         Qb_name_hint>
+                         Qb_name_hint,
+                         Semijoin_hint,
+                         Subquery_hint>
   {
   public:
-    using OR3::OR3;
+    using OR5::OR5;
+
+    /**
+      Append additional hint arguments to the printed string.
+      Implement this method in Hint specifications if needed:
+      Table_level_hint, Semijoin_hint, etc
+
+      @param thd             Pointer to THD object
+      @param str             Pointer to String object
+    */
+    void append_args(THD *thd, String *str) const {}
   };
 
-
+private:
   // hint_list ::= hint [ hint... ]
   class Hint_list_container: public List<Hint>
   {
@@ -578,6 +794,7 @@ private:
     bool add(Optimizer_hint_parser *p, Hint &&hint);
     size_t count() const { return elements; }
   };
+
 
   class Hint_list: public LIST<PARSER, Hint_list_container,
                                Hint, TokenID::tNULL/*not separated list*/, 1>
@@ -598,12 +815,11 @@ public:
   public:
     using AND2::AND2;
   };
-
 };
 
 
 /*
-  This wrapper class is needed to use a forward declaration in sql_lex.h
+  These wrapper class is needed to use a forward declarations in sql_lex.h
   instead of including the entire opt_hints_parser.h.
   (forward declarations of qualified nested classes are not possible in C++)
 */
@@ -612,6 +828,5 @@ class Optimizer_hint_parser_output: public Optimizer_hint_parser::Hints
 public:
   using Hints::Hints;
 };
-
 
 #endif // OPT_HINTS_PARSER
