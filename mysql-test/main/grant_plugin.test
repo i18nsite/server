@@ -13,8 +13,10 @@ install soname 'auth_0x0100';
 CREATE USER foo@localhost IDENTIFIED VIA auth_0x0100;
 uninstall plugin auth_0x0100;
 
+--disable_cursor_protocol
 select Priv from mysql.global_priv where User = "foo" and host="localhost"
 into @priv;
+--enable_cursor_protocol
 --error ER_PLUGIN_IS_NOT_LOADED
 SET PASSWORD FOR foo@localhost = "1111";
 select Priv = @priv as "Nothing changed" from mysql.global_priv where User = "foo" and host="localhost";
