@@ -2212,7 +2212,7 @@ Sort_keys::compute_sort_length(THD *thd, bool *allow_packing_for_sortkeys)
 
     if (sortorder->is_variable_sized())
     {
-      *allow_packing_for_sortkeys= sortorder->check_if_packing_possible(thd);
+      *allow_packing_for_sortkeys&= sortorder->check_if_packing_possible(thd);
 
       set_if_smaller(sortorder->length, thd->variables.max_sort_length);
       set_if_smaller(sortorder->original_length, thd->variables.max_sort_length);
@@ -2225,6 +2225,7 @@ Sort_keys::compute_sort_length(THD *thd, bool *allow_packing_for_sortkeys)
     //
     // GConcat fields might be different so these need to be tested.
     sortorder->is_mem_comparable= true;
+    sortorder->setup_key_cmp_function();
 
     DBUG_ASSERT(length < UINT_MAX32 - sortorder->length);
     length+= sortorder->length;
@@ -2749,6 +2750,16 @@ void SORT_FIELD_ATTR::set_length_and_original_length(THD *thd, uint length_arg)
   original_length= length_arg;
 }
 
+void SORT_FIELD::setup_key_cmp_function()
+{
+  if (is_variable_sized())
+    key_compare_fun= SORT_FIELD::compare_packed_varstrings;
+  else if (is_mem_comparable)
+    key_compare_fun= SORT_FIELD::compare_packed_fixed_size_vals;
+  else
+    key_compare_fun= SORT_FIELD::compare_fixed_size_vals;
+}
+
 
 /*
   @brief
@@ -2767,12 +2778,7 @@ void SORT_FIELD::setup_key_part(Field *fld, bool is_mem_comparable_arg)
   item= NULL;
   reverse= false;
   SORT_FIELD_ATTR::setup_key_part(fld, is_mem_comparable_arg);
-  if (is_variable_sized())
-    key_compare_fun= SORT_FIELD::compare_packed_varstrings;
-  else if (is_mem_comparable)
-    key_compare_fun= SORT_FIELD::compare_packed_fixed_size_vals;
-  else
-    key_compare_fun= SORT_FIELD::compare_fixed_size_vals;
+  setup_key_cmp_function();
 }
 
 

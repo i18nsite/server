@@ -7377,6 +7377,7 @@ struct SORT_FIELD: public SORT_FIELD_ATTR
   Item	*item;				/* Item if not sorting fields */
   bool reverse;				/* if descending sort */
   void setup_key_part(Field *fld, bool is_mem_comparable);
+  void setup_key_cmp_function();
   int compare_keys(const uchar *a, size_t *a_len,
                    const uchar *b, size_t *b_len) const;
 
