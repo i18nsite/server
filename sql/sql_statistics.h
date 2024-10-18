@@ -412,7 +412,7 @@ class Histogram_builder: public Sql_alloc
 {
 protected:
   Field *column;           /* table field for which the histogram is built */
-  uint col_length;         /* size of this field                           */
+  size_t col_length;         /* size of this field                           */
   ha_rows records;         /* number of records the histogram is built for */
 
   Histogram_builder(Field *col, uint col_len, ha_rows rows) :
