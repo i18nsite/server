@@ -880,7 +880,7 @@ rpl_parallel_print_info(THD *thd, THD *conflicting_thd)
     mysql_mutex_unlock(&wfc->LOCK_wait_commit);
   }
 
-  Ha_trx_info *ha_list= conflicting_thd->transaction.all.ha_list;
+  Ha_trx_info *ha_list= conflicting_thd->transaction->all.ha_list;
   if (ha_list && ha_list->is_started())
   {
     sql_print_information("Slave SQL thread: Status from engines participating "
