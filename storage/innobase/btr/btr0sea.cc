@@ -287,21 +287,23 @@ static void btr_search_check_free_space_in_heap(const dict_index_t *index)
   part->latch. It would also be cleared by
   btr_sea::partition::clear() in btr_search_disable(), or
   btr_sea::partition::free() in innodb_shutdown(). */
+  part->latch.rd_lock(SRW_LOCK_CALL);
 
-  if (!part->heap->ahi_block)
+  if (btr_search.enabled && part->heap && !part->heap->ahi_block)
   {
     buf_block_t *block= buf_block_alloc();
-    part->latch.rd_lock(SRW_LOCK_CALL);
     /* Even though our callers already checked for btr_search_enabled,
     we must recheck it while holding part->latch, because
     btr_search_disable() may have invoked part->clear() meanwhile. */
-    const bool filled{btr_search.enabled && !part->heap->ahi_block};
+    const bool filled{!part->heap->ahi_block};
     if (filled)
       part->heap->ahi_block= block;
     part->latch.rd_unlock();
     if (!filled)
       buf_block_free(block);
   }
+  else
+    part->latch.rd_unlock();
 }
 
 /** Set index->ref_count = 0 on all indexes of a table.
