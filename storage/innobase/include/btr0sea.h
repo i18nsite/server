@@ -106,19 +106,15 @@ void btr_search_drop_page_hash_when_freed(const page_id_t page_id);
 /** Updates the page hash index when a single record is inserted on a page.
 @param[in]	cursor	cursor which was positioned to the place to insert
 			using btr_cur_search_, and the new record has been
-			inserted next to the cursor.
-@param[in]	ahi_latch	the adaptive hash index latch */
-void btr_search_update_hash_node_on_insert(btr_cur_t *cursor,
-                                           srw_spin_lock *ahi_latch);
+			inserted next to the cursor. */
+void btr_search_update_hash_node_on_insert(btr_cur_t *cursor);
 
 /** Updates the page hash index when a single record is inserted on a page.
 @param[in,out]	cursor		cursor which was positioned to the
 				place to insert using btr_cur_search_...,
 				and the new record has been inserted next
-				to the cursor
-@param[in]	ahi_latch	the adaptive hash index latch */
-void btr_search_update_hash_on_insert(btr_cur_t *cursor,
-                                      srw_spin_lock *ahi_latch);
+				to the cursor */
+void btr_search_update_hash_on_insert(btr_cur_t *cursor);
 
 /** Updates the page hash index when a single record is deleted from a page.
 @param[in]	cursor	cursor which was positioned on the record to delete
@@ -154,7 +150,7 @@ bool btr_search_check_marked_free_index(const buf_block_t *block);
 # define btr_search_s_unlock_all(index)
 # define btr_search_info_update(index, cursor)
 # define btr_search_move_or_delete_hash_entries(new_block, block)
-# define btr_search_update_hash_on_insert(cursor, ahi_latch)
+# define btr_search_update_hash_on_insert(cursor)
 # define btr_search_update_hash_on_delete(cursor)
 # ifdef UNIV_DEBUG
 #  define btr_search_check_marked_free_index(block)
@@ -276,25 +272,7 @@ struct btr_search_sys_t
   };
 
   /** Partitions of the adaptive hash index */
-  partition *parts;
-
-  /** Get an adaptive hash index partition */
-  partition *get_part(index_id_t id, ulint space_id) const noexcept
-  {
-    return parts + ut_fold_ulint_pair(ulint(id), space_id) % btr_ahi_parts;
-  }
-
-  /** Get an adaptive hash index partition */
-  partition *get_part(const dict_index_t &index) const noexcept
-  {
-    ut_ad(!index.table->space ||
-          index.table->space->id == index.table->space_id);
-    return get_part(ulint(index.id), index.table->space_id);
-  }
-
-  /** Get the search latch for the adaptive hash index partition */
-  srw_spin_lock *get_latch(const dict_index_t &index) const
-  { return &get_part(index)->latch; }
+  partition parts;
 
   /** Create and initialize at startup */
   void create() noexcept;
@@ -316,7 +294,7 @@ TRANSACTIONAL_INLINE inline ulint dict_index_t::n_ahi_pages() const
 {
   if (!btr_search_enabled)
     return 0;
-  srw_spin_lock *latch= &btr_search_sys.get_part(*this)->latch;
+  srw_spin_lock *latch= &btr_search_sys.parts.latch;
 #if !defined NO_ELISION && !defined SUX_LOCK_GENERIC
   if (xbegin())
   {

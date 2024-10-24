@@ -86,32 +86,24 @@ btr_search_info_update(
 /** Lock all search latches in exclusive mode. */
 static inline void btr_search_x_lock_all()
 {
-	for (ulint i = 0; i < btr_ahi_parts; ++i) {
-		btr_search_sys.parts[i].latch.wr_lock(SRW_LOCK_CALL);
-	}
+	btr_search_sys.parts.latch.wr_lock(SRW_LOCK_CALL);
 }
 
 /** Unlock all search latches from exclusive mode. */
 static inline void btr_search_x_unlock_all()
 {
-	for (ulint i = 0; i < btr_ahi_parts; ++i) {
-		btr_search_sys.parts[i].latch.wr_unlock();
-	}
+	btr_search_sys.parts.latch.wr_unlock();
 }
 
 /** Lock all search latches in shared mode. */
 static inline void btr_search_s_lock_all()
 {
-	for (ulint i = 0; i < btr_ahi_parts; ++i) {
-		btr_search_sys.parts[i].latch.rd_lock(SRW_LOCK_CALL);
-	}
+	btr_search_sys.parts.latch.rd_lock(SRW_LOCK_CALL);
 }
 
 /** Unlock all search latches from shared mode. */
 static inline void btr_search_s_unlock_all()
 {
-	for (ulint i = 0; i < btr_ahi_parts; ++i) {
-		btr_search_sys.parts[i].latch.rd_unlock();
-	}
+	btr_search_sys.parts.latch.rd_unlock();
 }
 #endif /* BTR_CUR_HASH_ADAPT */

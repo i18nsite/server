@@ -19141,13 +19141,14 @@ static MYSQL_SYSVAR_BOOL(adaptive_hash_index, btr_search_enabled,
   "Enable InnoDB adaptive hash index (disabled by default).",
   NULL, innodb_adaptive_hash_index_update, false);
 
-/** Number of distinct partitions of AHI.
-Each partition is protected by its own latch and so we have parts number
-of latches protecting complete search system. */
-static MYSQL_SYSVAR_ULONG(adaptive_hash_index_parts, btr_ahi_parts,
-  PLUGIN_VAR_OPCMDARG | PLUGIN_VAR_READONLY,
-  "Number of InnoDB Adaptive Hash Index Partitions (default 8)",
-  NULL, NULL, 8, 1, 512, 0);
+static ulong innodb_adaptive_hash_index_parts;
+
+static MYSQL_SYSVAR_ULONG(adaptive_hash_index_parts,
+  innodb_adaptive_hash_index_parts,
+  PLUGIN_VAR_OPCMDARG | PLUGIN_VAR_READONLY |
+  PLUGIN_VAR_DEPRECATED | PLUGIN_VAR_NOCMDOPT,
+  "Deprecated parameter with no effect",
+  NULL, NULL, 1, 1, 512, 0);
 #endif /* BTR_CUR_HASH_ADAPT */
 
 static MYSQL_SYSVAR_UINT(compression_level, page_zip_level,

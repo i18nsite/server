@@ -40,9 +40,6 @@ struct btr_search_t;
 /** Is search system enabled.
 Search system is protected by array of latches. */
 extern char	btr_search_enabled;
-
-/** Number of adaptive hash index partition. */
-extern ulong	btr_ahi_parts;
 #endif /* BTR_CUR_HASH_ADAPT */
 
 /** The size of a reference to data stored on a different page.

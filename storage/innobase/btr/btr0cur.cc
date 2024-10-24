@@ -2620,12 +2620,10 @@ fail_err:
 		ut_ad(flags == BTR_NO_LOCKING_FLAG);
 	} else if (index->table->is_temporary()) {
 	} else {
-		srw_spin_lock* ahi_latch = btr_search_sys.get_latch(*index);
 		if (!reorg && cursor->flag == BTR_CUR_HASH) {
-			btr_search_update_hash_node_on_insert(
-				cursor, ahi_latch);
+			btr_search_update_hash_node_on_insert(cursor);
 		} else {
-			btr_search_update_hash_on_insert(cursor, ahi_latch);
+			btr_search_update_hash_on_insert(cursor);
 		}
 	}
 #endif /* BTR_CUR_HASH_ADAPT */
@@ -2818,8 +2816,7 @@ btr_cur_pessimistic_insert(
 			ut_ad(!(flags & BTR_CREATE_FLAG));
 		} else if (index->table->is_temporary()) {
 		} else {
-			btr_search_update_hash_on_insert(
-				cursor, btr_search_sys.get_latch(*index));
+			btr_search_update_hash_on_insert(cursor);
 		}
 #endif /* BTR_CUR_HASH_ADAPT */
 		if (inherit && !(flags & BTR_NO_LOCKING_FLAG)) {
@@ -3402,9 +3399,9 @@ btr_cur_update_in_place(
 
 #ifdef BTR_CUR_HASH_ADAPT
 	{
-		srw_spin_lock* ahi_latch = block->index
-			? btr_search_sys.get_latch(*index) : NULL;
-		if (ahi_latch) {
+                const dict_index_t *const block_index = block->index;
+
+		if (block_index) {
 			/* TO DO: Can we skip this if none of the fields
 			index->search_info->curr_n_fields
 			are being updated? */
@@ -3422,7 +3419,7 @@ btr_cur_update_in_place(
 				btr_search_update_hash_on_delete(cursor);
 			}
 
-			ahi_latch->wr_lock(SRW_LOCK_CALL);
+			btr_search_sys.parts.latch.wr_lock(SRW_LOCK_CALL);
 		}
 
 		assert_block_ahi_valid(block);
@@ -3432,8 +3429,8 @@ btr_cur_update_in_place(
 					 mtr);
 
 #ifdef BTR_CUR_HASH_ADAPT
-		if (ahi_latch) {
-			ahi_latch->wr_unlock();
+		if (block_index) {
+			btr_search_sys.parts.latch.wr_unlock();
 		}
 	}
 #endif /* BTR_CUR_HASH_ADAPT */
