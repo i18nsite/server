@@ -1134,17 +1134,17 @@ dberr_t btr_cur_t::search_leaf(const dtuple_t *tuple, page_cur_mode_t mode,
 #ifndef BTR_CUR_ADAPT
   guess= nullptr;
 #else
-  btr_search_t *info= btr_search_get_info(index());
+  auto info= &index()->search_info;
   guess= info->root_guess;
 
 # ifdef BTR_CUR_HASH_ADAPT
 #  ifdef UNIV_SEARCH_PERF_STAT
   info->n_searches++;
 #  endif
-  /* We do a dirty read of btr_search_enabled below,
-     and btr_search_guess_on_hash() will have to check it again. */
-  if (!btr_search_enabled);
-  else if (btr_search_guess_on_hash(index(), info, tuple, mode,
+  /* We do a dirty read of btr_search.enabled below,
+  and btr_search_guess_on_hash() will have to check it again. */
+  if (!btr_search.enabled);
+  else if (btr_search_guess_on_hash(index(), tuple, mode,
                                     latch_mode, this, mtr))
   {
     /* Search using the hash index succeeded */
@@ -1477,7 +1477,7 @@ release_tree:
 
   reached_latched_leaf:
 #ifdef BTR_CUR_HASH_ADAPT
-    if (btr_search_enabled && !(tuple->info_bits & REC_INFO_MIN_REC_FLAG))
+    if (btr_search.enabled && !(tuple->info_bits & REC_INFO_MIN_REC_FLAG))
     {
       if (page_cur_search_with_match_bytes(tuple, mode,
                                            &up_match, &up_bytes,
@@ -1502,11 +1502,10 @@ release_tree:
         goto need_opposite_intention;
 
 #ifdef BTR_CUR_HASH_ADAPT
-    /* We do a dirty read of btr_search_enabled here.  We will
-    properly check btr_search_enabled again in
+    /* We do a dirty read of btr_search.enabled here.  We will recheck in
     btr_search_build_page_hash_index() before building a page hash
     index, while holding search latch. */
-    if (!btr_search_enabled);
+    if (!btr_search.enabled);
     else if (tuple->info_bits & REC_INFO_MIN_REC_FLAG)
       /* This may be a search tuple for btr_pcur_t::restore_position(). */
       ut_ad(tuple->is_metadata() ||
@@ -1748,11 +1747,10 @@ dberr_t btr_cur_t::pessimistic_search_leaf(const dtuple_t *tuple,
       ut_ad(low_match != ULINT_UNDEFINED || mode != PAGE_CUR_LE);
 
 #ifdef BTR_CUR_HASH_ADAPT
-      /* We do a dirty read of btr_search_enabled here.  We will
-      properly check btr_search_enabled again in
+      /* We do a dirty read of btr_search.enabled here.  We will recheck in
       btr_search_build_page_hash_index() before building a page hash
       index, while holding search latch. */
-      if (!btr_search_enabled);
+      if (!btr_search.enabled);
       else if (tuple->info_bits & REC_INFO_MIN_REC_FLAG)
         /* This may be a search tuple for btr_pcur_t::restore_position(). */
         ut_ad(tuple->is_metadata() ||
@@ -1862,8 +1860,7 @@ dberr_t btr_cur_search_to_nth_level(ulint level,
 #ifndef BTR_CUR_ADAPT
   buf_block_t *block= nullptr;
 #else
-  btr_search_t *info= btr_search_get_info(index);
-  buf_block_t *block= info->root_guess;
+  buf_block_t *block= index->search_info.root_guess;
 #endif /* BTR_CUR_ADAPT */
 
   ut_ad(mtr->memo_contains_flagged(&index->lock,
@@ -3419,7 +3416,7 @@ btr_cur_update_in_place(
 				btr_search_update_hash_on_delete(cursor);
 			}
 
-			btr_search_sys.parts.latch.wr_lock(SRW_LOCK_CALL);
+			btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
 		}
 
 		assert_block_ahi_valid(block);
@@ -3430,7 +3427,7 @@ btr_cur_update_in_place(
 
 #ifdef BTR_CUR_HASH_ADAPT
 		if (block_index) {
-			btr_search_sys.parts.latch.wr_unlock();
+			btr_search.parts.latch.wr_unlock();
 		}
 	}
 #endif /* BTR_CUR_HASH_ADAPT */

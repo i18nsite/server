@@ -17606,9 +17606,9 @@ innodb_adaptive_hash_index_update(THD*, st_mysql_sys_var*, void*,
 {
 	mysql_mutex_unlock(&LOCK_global_system_variables);
 	if (*(my_bool*) save) {
-		btr_search_enable();
+		btr_search.enable();
 	} else {
-		btr_search_disable();
+		btr_search.disable();
 	}
 	mysql_mutex_lock(&LOCK_global_system_variables);
 }
@@ -19136,7 +19136,7 @@ static MYSQL_SYSVAR_BOOL(stats_traditional, srv_stats_sample_traditional,
   NULL, NULL, TRUE);
 
 #ifdef BTR_CUR_HASH_ADAPT
-static MYSQL_SYSVAR_BOOL(adaptive_hash_index, btr_search_enabled,
+static MYSQL_SYSVAR_BOOL(adaptive_hash_index, *(my_bool*) &btr_search.enabled,
   PLUGIN_VAR_OPCMDARG,
   "Enable InnoDB adaptive hash index (disabled by default).",
   NULL, innodb_adaptive_hash_index_update, false);
