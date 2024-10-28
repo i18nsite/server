@@ -65,22 +65,6 @@ struct ha_node_t {
   const rec_t *rec;
 };
 
-/** Search for a record in the hash table.
-@param fold   rec_fold(rec)
-@param rec    B-tree index leaf page record
-@param cell   hash table cell
-@return pointer to the hash table node
-@retval nullptr if not found */
-static ha_node_t *ha_search_with_data(ulint fold, const rec_t *rec,
-                                      const hash_cell_t &cell)
-{
-  for (ha_node_t *node= static_cast<ha_node_t*>(cell.node); node;
-       node= node->next)
-    if (node->rec == rec)
-      return node;
-  return nullptr;
-}
-
 inline void btr_sea::partition::init() noexcept
 {
   memset((void*) this, 0, sizeof *this);
@@ -655,23 +639,18 @@ void btr_sea::partition::insert(ulint fold, const rec_t *rec) noexcept
 }
 
 __attribute__((nonnull))
-/** Delete a record.
+/** Fix up deleting a record.
 @param table     hash table
 @param heap      memory heap
 @param del_node  record to be deleted */
-static void ha_delete_hash_node(hash_table_t *table, mem_heap_t *heap,
-                                ulint fold, ha_node_t *del_node,
-                                hash_cell_t *cell)
+static void ha_delete_hash_node_fixup(hash_table_t *table, mem_heap_t *heap,
+                                      ha_node_t *del_node)
 {
   ut_ad(btr_search_enabled);
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
   ut_a(del_node->block->page.frame == page_align(del_node->rec));
   ut_a(del_node->block->n_pointers-- < MAX_N_POINTERS);
 #endif /* UNIV_AHI_DEBUG || UNIV_DEBUG */
-  ut_ad(fold == del_node->fold);
-  ut_ad(cell == table->cell_get(fold));
-
-  cell->remove(*del_node, &ha_node_t::next);
 
   ha_node_t *top= static_cast<ha_node_t*>(mem_heap_get_top(heap, sizeof *top));
 
@@ -712,16 +691,19 @@ static void ha_remove_all_nodes_to_page(hash_table_t *table, mem_heap_t *heap,
   hash_cell_t *cell= table->cell_get(fold);
   static const uintptr_t page_size{srv_page_size};
 
-  for (ha_node_t *node= static_cast<ha_node_t*>(cell->node); node; )
+rewind:
+  for (ha_node_t **prev= reinterpret_cast<ha_node_t**>(&cell->node);
+       *prev; prev= &(*prev)->next)
   {
+    ha_node_t *node= *prev;
     if ((uintptr_t(node->rec) ^ uintptr_t(page)) < page_size)
     {
-      ha_delete_hash_node(table, heap, node->fold, node, cell);
+      *prev= node->next;
+      node->next= nullptr;
+      ha_delete_hash_node_fixup(table, heap, node);
       /* The deletion may compact the heap of nodes and move other nodes! */
-      node= static_cast<ha_node_t*>(cell->node);
+      goto rewind;
     }
-    else
-      node= node->next;
   }
 #ifdef UNIV_DEBUG
   /* Check that all nodes really got deleted */
@@ -739,11 +721,18 @@ inline bool btr_sea::partition::erase(ulint fold, const rec_t *rec) noexcept
   ut_ad(btr_search_enabled);
   hash_cell_t *cell= table.cell_get(fold);
 
-  if (ha_node_t *node= ha_search_with_data(fold, rec, *cell))
+  for (ha_node_t **prev= reinterpret_cast<ha_node_t**>(&cell->node);
+       *prev; prev= &(*prev)->next)
   {
-    ha_delete_hash_node(&table, heap, fold, node, cell);
-    latch.wr_unlock();
-    return true;
+    ha_node_t *node= *prev;
+    if (node->rec == rec)
+    {
+      *prev= node->next;
+      node->next= nullptr;
+      ha_delete_hash_node_fixup(&table, heap, node);
+      latch.wr_unlock();
+      return true;
+    }
   }
 
   latch.wr_unlock();
@@ -773,18 +762,18 @@ static bool ha_search_and_update_if_found(hash_table_t *table, ulint fold,
   if (!btr_search_enabled)
     return false;
 
-  if (ha_node_t *node= ha_search_with_data(fold, data,
-                                           *table->cell_get(fold)))
-  {
+  for (ha_node_t *node= static_cast<ha_node_t*>(table->cell_get(fold)->node);
+       node; node= node->next)
+    if (node->rec == data)
+    {
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
-    ut_a(node->block->n_pointers-- < MAX_N_POINTERS);
-    ut_a(new_block->n_pointers++ < MAX_N_POINTERS);
-    node->block= new_block;
+      ut_a(node->block->n_pointers-- < MAX_N_POINTERS);
+      ut_a(new_block->n_pointers++ < MAX_N_POINTERS);
+      node->block= new_block;
 #endif /* UNIV_AHI_DEBUG || UNIV_DEBUG */
-    node->rec= new_data;
-
-    return true;
-  }
+      node->rec= new_data;
+      return true;
+    }
 
   return false;
 }
