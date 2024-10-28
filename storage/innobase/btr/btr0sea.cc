@@ -65,42 +65,16 @@ struct ha_node_t {
   const rec_t *rec;
 };
 
-/** Get the first hash chain bucket
-@param table   hash table
-@param fold    rec_fold() value
-@return the first hash chain bucket
-@retval nullptr if there is none */
-static ha_node_t *ha_chain_get_first(const hash_table_t *table, ulint fold)
-{
-  return static_cast<ha_node_t*>(table->array[table->calc_hash(fold)].node);
-}
-
-/*************************************************************//**
-Looks for an element in a hash table.
-@param table   hash table
-@param fold    rec_fold() value
-@return pointer to a record with rec_fold(rec) == fold
-@retval nullptr if no such record was found */
-inline
-const rec_t *ha_search_and_get_data(const hash_table_t *table, ulint fold)
-{
-  for (const ha_node_t *node= ha_chain_get_first(table, fold); node;
-       node= node->next)
-    if (node->fold == fold)
-      return node->rec;
-  return nullptr;
-}
-
 /** Search for a record in the hash table.
-@param table  hash table
 @param fold   rec_fold(rec)
 @param rec    B-tree index leaf page record
+@param cell   hash table cell
 @return pointer to the hash table node
 @retval nullptr if not found */
-static ha_node_t* ha_search_with_data(const hash_table_t *table, ulint fold,
-                                      const rec_t *rec)
+static ha_node_t *ha_search_with_data(ulint fold, const rec_t *rec,
+                                      const hash_cell_t &cell)
 {
-  for (ha_node_t *node= ha_chain_get_first(table, fold); node;
+  for (ha_node_t *node= static_cast<ha_node_t*>(cell.node); node;
        node= node->next)
     if (node->rec == rec)
       return node;
@@ -686,15 +660,18 @@ __attribute__((nonnull))
 @param heap      memory heap
 @param del_node  record to be deleted */
 static void ha_delete_hash_node(hash_table_t *table, mem_heap_t *heap,
-                                ha_node_t *del_node)
+                                ulint fold, ha_node_t *del_node,
+                                hash_cell_t *cell)
 {
   ut_ad(btr_search_enabled);
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
   ut_a(del_node->block->page.frame == page_align(del_node->rec));
   ut_a(del_node->block->n_pointers-- < MAX_N_POINTERS);
 #endif /* UNIV_AHI_DEBUG || UNIV_DEBUG */
+  ut_ad(fold == del_node->fold);
+  ut_ad(cell == table->cell_get(fold));
 
-  table->cell_get(del_node->fold)->remove(*del_node, &ha_node_t::next);
+  cell->remove(*del_node, &ha_node_t::next);
 
   ha_node_t *top= static_cast<ha_node_t*>(mem_heap_get_top(heap, sizeof *top));
 
@@ -702,7 +679,7 @@ static void ha_delete_hash_node(hash_table_t *table, mem_heap_t *heap,
   {
     /* Compact the heap of nodes by moving the top in the place of del_node. */
     *del_node= *top;
-    hash_cell_t *cell= &table->array[table->calc_hash(top->fold)];
+    hash_cell_t *cell= table->cell_get(top->fold);
 
     /* Look for the pointer to the top node, to update it */
     if (cell->node == top)
@@ -732,20 +709,23 @@ __attribute__((nonnull))
 static void ha_remove_all_nodes_to_page(hash_table_t *table, mem_heap_t *heap,
                                         ulint fold, const page_t *page)
 {
-  for (ha_node_t *node= ha_chain_get_first(table, fold); node; )
+  hash_cell_t *cell= table->cell_get(fold);
+  static const uintptr_t page_size{srv_page_size};
+
+  for (ha_node_t *node= static_cast<ha_node_t*>(cell->node); node; )
   {
-    if (page_align(node->rec) == page)
+    if ((uintptr_t(node->rec) ^ uintptr_t(page)) < page_size)
     {
-      ha_delete_hash_node(table, heap, node);
+      ha_delete_hash_node(table, heap, node->fold, node, cell);
       /* The deletion may compact the heap of nodes and move other nodes! */
-      node= ha_chain_get_first(table, fold);
+      node= static_cast<ha_node_t*>(cell->node);
     }
     else
       node= node->next;
   }
 #ifdef UNIV_DEBUG
   /* Check that all nodes really got deleted */
-  for (ha_node_t *node= ha_chain_get_first(table, fold); node;
+  for (ha_node_t *node= static_cast<ha_node_t*>(cell->node); node;
        node= node->next)
     ut_ad(page_align(node->rec) != page);
 #endif /* UNIV_DEBUG */
@@ -757,10 +737,11 @@ inline bool btr_sea::partition::erase(ulint fold, const rec_t *rec) noexcept
   ut_ad(latch.is_write_locked());
 #endif
   ut_ad(btr_search_enabled);
+  hash_cell_t *cell= table.cell_get(fold);
 
-  if (ha_node_t *node= ha_search_with_data(&table, fold, rec))
+  if (ha_node_t *node= ha_search_with_data(fold, rec, *cell))
   {
-    ha_delete_hash_node(&table, heap, node);
+    ha_delete_hash_node(&table, heap, fold, node, cell);
     latch.wr_unlock();
     return true;
   }
@@ -792,7 +773,8 @@ static bool ha_search_and_update_if_found(hash_table_t *table, ulint fold,
   if (!btr_search_enabled)
     return false;
 
-  if (ha_node_t *node= ha_search_with_data(table, fold, data))
+  if (ha_node_t *node= ha_search_with_data(fold, data,
+                                           *table->cell_get(fold)))
   {
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
     ut_a(node->block->n_pointers-- < MAX_N_POINTERS);
@@ -1212,17 +1194,10 @@ btr_search_guess_on_hash(
 	cursor->flag = BTR_CUR_HASH;
 
 	auto part = &btr_search.parts;
-	const rec_t* rec;
 
 	part->latch.rd_lock(SRW_LOCK_CALL);
 
 	if (!btr_search_enabled) {
-		goto ahi_release_and_fail;
-	}
-
-	rec = ha_search_and_get_data(&part->table, fold);
-
-	if (!rec) {
 ahi_release_and_fail:
 		part->latch.rd_unlock();
 fail:
@@ -1239,8 +1214,23 @@ fail:
 		return false;
 	}
 
-	buf_block_t* block = buf_pool.block_from_ahi(rec);
+	const ha_node_t* node
+		= static_cast<ha_node_t*>(part->table.cell_get(fold)->node);
 
+	for (; node; node = node->next) {
+		if (node->fold == fold) {
+			goto found;
+		}
+	}
+
+	goto ahi_release_and_fail;
+
+found:
+	const rec_t* rec = node->rec;
+	buf_block_t* block = buf_pool.block_from_ahi(rec);
+#if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
+	ut_a(block == node->block);
+#endif
 	buf_pool_t::hash_chain& chain = buf_pool.page_hash.cell_get(
 		block->page.id().fold());
 	bool got_latch;
@@ -1291,7 +1281,7 @@ block_and_ahi_release_and_fail:
 
 	ut_ad(page_rec_is_user_rec(rec));
 
-	btr_cur_position(index, (rec_t*) rec, block, cursor);
+	btr_cur_position(index, const_cast<rec_t*>(rec), block, cursor);
 
 	/* Check the validity of the guess within the page */
 
