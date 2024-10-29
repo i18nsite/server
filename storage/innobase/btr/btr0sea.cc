@@ -72,19 +72,19 @@ inline void btr_sea::partition::clear() noexcept
 #ifndef SUX_LOCK_GENERIC
   ut_ad(latch.is_write_locked());
 #endif
-  ut_ad(heap->type == MEM_HEAP_BUFFER);
+  ut_ad(hea->type == MEM_HEAP_BUFFER);
   buf_block_t *b= nullptr;
   spare.exchange(b);
   if (b)
     buf_pool.free_block(b);
-  mem_heap_free(heap);
-  heap= nullptr;
+  mem_heap_free(hea);
+  hea= nullptr;
   ut_free(table.array);
 }
 
 inline void btr_sea::partition::free() noexcept
 {
-  if (heap)
+  if (hea)
   {
     ut_d(latch.wr_lock(SRW_LOCK_CALL));
     clear();
@@ -96,7 +96,7 @@ inline void btr_sea::partition::free() noexcept
 inline void btr_sea::partition::alloc(ulint hash_size) noexcept
 {
   table.create(hash_size);
-  heap= mem_heap_create_typed(std::min<ulong>(4096,
+  hea = mem_heap_create_typed(std::min<ulong>(4096,
                                               MEM_MAX_ALLOC_IN_BUF / 2 -
                                               MEM_BLOCK_HEADER_SIZE),
                               MEM_HEAP_BUFFER);
@@ -346,7 +346,7 @@ void btr_sea::enable(bool resize) noexcept
 	btr_search_x_lock_all();
 	ulint hash_size = buf_pool_get_curr_size() / sizeof(void *) / 64;
 
-	if (btr_search.parts.heap) {
+	if (btr_search.parts.hea) {
 		ut_ad(btr_search.enabled);
 		btr_search_x_unlock_all();
 		return;
@@ -570,9 +570,9 @@ void btr_sea::partition::insert(ulint fold, const rec_t *rec) noexcept
   {
     /* This is based on mem_heap_alloc(), but specialized for the
     adaptive hash index. */
-    ut_ad(heap->type == MEM_HEAP_BUFFER);
+    ut_ad(hea->type == MEM_HEAP_BUFFER);
 
-    mem_block_t *last= UT_LIST_GET_LAST(heap->base);
+    mem_block_t *last= UT_LIST_GET_LAST(hea->base);
     const size_t n{sizeof *node};
     if (last->len < last->free + n)
     {
@@ -587,7 +587,7 @@ void btr_sea::partition::insert(ulint fold, const rec_t *rec) noexcept
       ut_d(static_assert(sizeof new_block->file_name == 8, ""));
       ut_d(memcpy(new_block->file_name, "btr0sea", 8));
       ut_d(new_block->line= __LINE__);
-      heap->total_size+= MEM_MAX_ALLOC_IN_BUF;
+      hea->total_size+= MEM_MAX_ALLOC_IN_BUF;
       mem_block_set_len(new_block, MEM_MAX_ALLOC_IN_BUF);
       mem_block_set_type(new_block, MEM_HEAP_BUFFER);
       mem_block_set_free(new_block, MEM_BLOCK_HEADER_SIZE);
@@ -595,7 +595,7 @@ void btr_sea::partition::insert(ulint fold, const rec_t *rec) noexcept
       ut_d(new_block->total_size= ULINT_UNDEFINED);
       MEM_UNDEFINED(&new_block->total_size, sizeof block->total_size);
       MEM_NOACCESS(new_block + 1, srv_page_size - sizeof *new_block);
-      UT_LIST_INSERT_AFTER(heap->base, last, new_block);
+      UT_LIST_INSERT_AFTER(hea->base, last, new_block);
       last= new_block;
     }
 
@@ -628,10 +628,9 @@ void btr_sea::partition::insert(ulint fold, const rec_t *rec) noexcept
 __attribute__((nonnull))
 /** Fix up deleting a record.
 @param table     hash table
-@param heap      memory heap
 @param del_node  record to be deleted */
-static void ha_delete_hash_node_fixup(hash_table_t *table, mem_heap_t *heap,
-                                      ha_node_t *del_node) noexcept
+static void ha_delete_hash_node_fixup(hash_table_t *table, ha_node_t *del_node)
+  noexcept
 {
   ut_ad(btr_search.enabled);
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
@@ -639,7 +638,7 @@ static void ha_delete_hash_node_fixup(hash_table_t *table, mem_heap_t *heap,
   ut_a(del_node->block->n_pointers-- < MAX_N_POINTERS);
 #endif /* UNIV_AHI_DEBUG || UNIV_DEBUG */
 
-  mem_block_t *last= UT_LIST_GET_LAST(heap->base);
+  mem_block_t *last= UT_LIST_GET_LAST(btr_search.parts.hea->base);
 
   ha_node_t *top= reinterpret_cast<ha_node_t*>
     (reinterpret_cast<char*>(last) + last->free - sizeof *top);
@@ -668,10 +667,10 @@ static void ha_delete_hash_node_fixup(hash_table_t *table, mem_heap_t *heap,
 
   const size_t n{sizeof(ha_node_t)};
   /* If free == start, we may free the block if it is not the first one */
-  if ((last->free-= n) == last->start && heap != last)
+  if ((last->free-= n) == last->start && btr_search.parts.hea != last)
   {
-    UT_LIST_REMOVE(heap->base, last);
-    heap->total_size-= last->len;
+    UT_LIST_REMOVE(btr_search.parts.hea->base, last);
+    btr_search.parts.hea->total_size-= last->len;
     buf_block_free(last->buf_block);
   }
   else
@@ -681,10 +680,10 @@ static void ha_delete_hash_node_fixup(hash_table_t *table, mem_heap_t *heap,
 __attribute__((nonnull))
 /** Delete all pointers to a page.
 @param table     hash table
-@param heap      memory heap
-@param page      record to be deleted */
-static void ha_remove_all_nodes_to_page(hash_table_t *table, mem_heap_t *heap,
-                                        ulint fold, const page_t *page)
+@param fold      fold value
+@param page      page of a record to be deleted */
+static void ha_remove_all_nodes_to_page(hash_table_t *table, ulint fold,
+                                        const page_t *page)
 {
   hash_cell_t *cell= table->cell_get(fold);
   static const uintptr_t page_size{srv_page_size};
@@ -698,7 +697,7 @@ rewind:
     {
       *prev= node->next;
       node->next= nullptr;
-      ha_delete_hash_node_fixup(table, heap, node);
+      ha_delete_hash_node_fixup(table, node);
       /* The deletion may compact the heap of nodes and move other nodes! */
       goto rewind;
     }
@@ -727,7 +726,7 @@ inline bool btr_sea::partition::erase(ulint fold, const rec_t *rec) noexcept
     {
       *prev= node->next;
       node->next= nullptr;
-      ha_delete_hash_node_fixup(&table, heap, node);
+      ha_delete_hash_node_fixup(&table, node);
       latch.wr_unlock();
       return true;
     }
@@ -1474,8 +1473,7 @@ all_deleted:
 	}
 
 	for (ulint i = 0; i < n_cached; i++) {
-		ha_remove_all_nodes_to_page(&part->table, part->heap,
-					    folds[i], page);
+		ha_remove_all_nodes_to_page(&part->table, folds[i], page);
 	}
 
 	switch (index->search_info.ref_count--) {

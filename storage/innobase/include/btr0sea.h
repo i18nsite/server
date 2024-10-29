@@ -170,7 +170,7 @@ struct btr_sea
     /** map of dtuple_fold() or rec_fold() to rec_t* in buf_page_t::frame */
     hash_table_t table;
     /** memory heap for table */
-    mem_heap_t *heap;
+    mem_heap_t *hea;
     /** a cached block */
     Atomic_relaxed<buf_block_t*> spare;
 
