@@ -168,26 +168,6 @@ void
 mem_heap_empty(
 	mem_heap_t*	heap);
 
-/** Returns a pointer to the topmost element in a memory heap.
-The size of the element must be given.
-@param[in]	heap	memory heap
-@param[in]	n	size of the topmost element
-@return pointer to the topmost element */
-UNIV_INLINE
-void*
-mem_heap_get_top(
-	mem_heap_t*	heap,
-	ulint		n);
-
-/*****************************************************************//**
-Frees the topmost element in a memory heap.
-The size of the element must be given. */
-UNIV_INLINE
-void
-mem_heap_free_top(
-/*==============*/
-	mem_heap_t*	heap,	/*!< in: memory heap */
-	ulint		n);	/*!< in: size of the topmost element */
 /*****************************************************************//**
 Returns the space in bytes occupied by a memory heap. */
 UNIV_INLINE
@@ -313,10 +293,6 @@ struct mem_block_info_t {
 	ulint	start;	/*!< the value of the struct field 'free' at the
 			creation of the block */
 
-#ifdef BTR_CUR_HASH_ADAPT
-	/** a cached block in the heap root */
-	Atomic_relaxed<buf_block_t*>	ahi_block;
-#endif
 	buf_block_t*	buf_block;
 			/* if this block has been allocated from the buffer
 			pool, this contains the buf_block_t handle;

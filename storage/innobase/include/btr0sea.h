@@ -171,6 +171,8 @@ struct btr_sea
     hash_table_t table;
     /** memory heap for table */
     mem_heap_t *heap;
+    /** a cached block */
+    Atomic_relaxed<buf_block_t*> spare;
 
     inline void init() noexcept;
 

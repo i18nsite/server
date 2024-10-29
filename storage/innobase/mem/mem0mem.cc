@@ -287,9 +287,6 @@ mem_heap_create_block_func(
 	}
 
 	block->buf_block = buf_block;
-#ifdef BTR_CUR_HASH_ADAPT
-	block->ahi_block = nullptr;
-#endif
 
 	ut_d(ut_strlcpy_rev(block->file_name, file_name,
 			    sizeof(block->file_name)));

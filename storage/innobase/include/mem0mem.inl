@@ -275,62 +275,7 @@ void
 mem_heap_empty(
 	mem_heap_t*	heap)
 {
-#ifdef BTR_CUR_HASH_ADAPT
-	ut_ad(!heap->ahi_block);
-#endif
 	mem_heap_free_heap_top(heap, (byte*) heap + mem_block_get_start(heap));
-}
-
-/** Returns a pointer to the topmost element in a memory heap.
-The size of the element must be given.
-@param[in]	heap	memory heap
-@param[in]	n	size of the topmost element
-@return pointer to the topmost element */
-UNIV_INLINE
-void*
-mem_heap_get_top(
-	mem_heap_t*	heap,
-	ulint		n)
-{
-	mem_block_t*	block;
-	byte*		buf;
-
-	block = UT_LIST_GET_LAST(heap->base);
-
-	buf = (byte*) block + mem_block_get_free(block) - MEM_SPACE_NEEDED(n);
-
-	return((void*) buf);
-}
-
-/*****************************************************************//**
-Frees the topmost element in a memory heap. The size of the element must be
-given. */
-UNIV_INLINE
-void
-mem_heap_free_top(
-/*==============*/
-	mem_heap_t*	heap,	/*!< in: memory heap */
-	ulint		n)	/*!< in: size of the topmost element */
-{
-	mem_block_t*	block;
-
-	n += REDZONE_SIZE;
-
-	block = UT_LIST_GET_LAST(heap->base);
-
-	/* Subtract the free field of block */
-	mem_block_set_free(block, mem_block_get_free(block)
-			   - MEM_SPACE_NEEDED(n));
-
-	/* If free == start, we may free the block if it is not the first
-	one */
-
-	if ((heap != block) && (mem_block_get_free(block)
-				== mem_block_get_start(block))) {
-		mem_heap_block_free(heap, block);
-	} else {
-		MEM_NOACCESS((byte*) block + mem_block_get_free(block), n);
-	}
 }
 
 /** Creates a memory heap.
@@ -385,10 +330,6 @@ void
 mem_heap_free(
 	mem_heap_t*	heap)
 {
-#ifdef BTR_CUR_HASH_ADAPT
-	ut_ad(!heap->ahi_block);
-#endif
-
 	mem_block_t*	block;
 	mem_block_t*	prev_block;
 
@@ -414,9 +355,6 @@ mem_heap_get_size(
 /*==============*/
 	mem_heap_t*	heap)	/*!< in: heap */
 {
-#ifdef BTR_CUR_HASH_ADAPT
-	ut_ad(!heap->ahi_block);
-#endif
 	return heap->total_size;
 }
 

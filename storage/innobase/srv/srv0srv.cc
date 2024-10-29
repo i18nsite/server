@@ -810,7 +810,7 @@ srv_printf_innodb_monitor(
 		fprintf(file, "Hash table size " ULINTPF
 			", node heap has " ULINTPF " buffer(s)\n",
 			part->table.n_cells,
-			part->heap->base.count - !part->heap->ahi_block);
+			part->heap->base.count - !part->spare);
 	}
 	btr_search.parts.latch.rd_unlock();
 
@@ -945,7 +945,7 @@ srv_export_innodb_status(void)
 	if (part->heap) {
 		ut_ad(part->heap->type == MEM_HEAP_BUFFER);
 		mem_adaptive_hash += part->heap->total_size
-			+ !!part->heap->ahi_block * srv_page_size
+			+ !!part->spare * srv_page_size
 			+ part->table.n_cells
 			* sizeof *part->table.array;
 	}
