@@ -6061,7 +6061,7 @@ Create_func_version::create_builder(THD *thd)
   static const Lex_ident_routine name("version()"_LEX_CSTRING);
   return new (thd->mem_root) Item_static_string_func(thd, name,
                                                      Lex_cstring_strlen(server_version),
-                                                     system_charset_info_for_i_s,
+                                                     system_charset_info_for_i_s_mb4,
                                                      DERIVATION_SYSCONST);
 }
 

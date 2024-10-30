@@ -93,6 +93,7 @@ extern int reinit_ssl();
 
 extern "C" MYSQL_PLUGIN_IMPORT CHARSET_INFO *system_charset_info;
 extern "C" MYSQL_PLUGIN_IMPORT CHARSET_INFO *system_charset_info_for_i_s;
+extern "C" MYSQL_PLUGIN_IMPORT CHARSET_INFO *system_charset_info_for_i_s_mb4;
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO *files_charset_info ;
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO *national_charset_info;
 extern MYSQL_PLUGIN_IMPORT CHARSET_INFO *table_alias_charset;

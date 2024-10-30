@@ -236,7 +236,7 @@ Field	Type	Collation	Null	Key	Default	Extra	Privileges	Comment
 Insert_priv	enum('N','Y')	utf8mb3_general_ci	NO		N		select,insert,update,references	
 show full columns from v1;
 Field	Type	Collation	Null	Key	Default	Extra	Privileges	Comment
-c	varchar(64)	utf8mb3_general_ci	NO		NULL		select,insert,update,references	
+c	varchar(64)	utf8mb4_general1400_as_ci	NO		NULL		select,insert,update,references	
 select * from information_schema.COLUMNS where table_name="t1"
 and column_name= "a";
 TABLE_CATALOG	TABLE_SCHEMA	TABLE_NAME	COLUMN_NAME	ORDINAL_POSITION	COLUMN_DEFAULT	IS_NULLABLE	DATA_TYPE	CHARACTER_MAXIMUM_LENGTH	CHARACTER_OCTET_LENGTH	NUMERIC_PRECISION	NUMERIC_SCALE	DATETIME_PRECISION	CHARACTER_SET_NAME	COLLATION_NAME	COLUMN_TYPE	COLUMN_KEY	EXTRA	PRIVILEGES	COLUMN_COMMENT	IS_GENERATED	GENERATION_EXPRESSION	IS_SYSTEM_TIME_PERIOD_START	IS_SYSTEM_TIME_PERIOD_END
@@ -631,7 +631,7 @@ CHARACTER_SETS	CREATE TEMPORARY TABLE `CHARACTER_SETS` (
   `DEFAULT_COLLATE_NAME` varchar(64) NOT NULL,
   `DESCRIPTION` varchar(60) NOT NULL,
   `MAXLEN` bigint(3) NOT NULL
-) ENGINE=MEMORY DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MEMORY DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general1400_as_ci
 set names latin2;
 SHOW CREATE TABLE INFORMATION_SCHEMA.character_sets;
 Table	Create Table
@@ -640,7 +640,7 @@ CHARACTER_SETS	CREATE TEMPORARY TABLE `CHARACTER_SETS` (
   `DEFAULT_COLLATE_NAME` varchar(64) NOT NULL,
   `DESCRIPTION` varchar(60) NOT NULL,
   `MAXLEN` bigint(3) NOT NULL
-) ENGINE=MEMORY DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MEMORY DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general1400_as_ci
 set names latin1;
 create table t1 select * from information_schema.CHARACTER_SETS
 where CHARACTER_SET_NAME like "latin1";
@@ -651,9 +651,9 @@ alter table t1 default character set utf8;
 show create table t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `CHARACTER_SET_NAME` varchar(32) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL,
-  `DEFAULT_COLLATE_NAME` varchar(64) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL,
-  `DESCRIPTION` varchar(60) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL,
+  `CHARACTER_SET_NAME` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general1400_as_ci NOT NULL,
+  `DEFAULT_COLLATE_NAME` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general1400_as_ci NOT NULL,
+  `DESCRIPTION` varchar(60) CHARACTER SET utf8mb4 COLLATE utf8mb4_general1400_as_ci NOT NULL,
   `MAXLEN` bigint(3) NOT NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_uca1400_ai_ci
 drop table t1;
@@ -2503,7 +2503,7 @@ drop table t1, t2;
 #
 # MDEV-24593 Signal 11 when group by primary key of table joined to information_schema.columns
 #
-create table t1 (f varchar(64) primary key);
+create table t1 (f varchar(64) collate utf8mb4_general1400_as_ci primary key);
 select f from information_schema.columns i
 inner join t1 on f=i.column_name
 group by f;
@@ -2535,16 +2535,16 @@ drop table t1;
 SET SQL_MODE= 'EMPTY_STRING_IS_NULL';
 CREATE OR REPLACE TABLE t1 AS SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE 1 = 0;
 SHOW returned: CREATE TABLE `t1` (
-  `TABLE_NAME` varchar(64) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL
+  `TABLE_NAME` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general1400_as_ci NOT NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 DROP TABLE t1;
 CREATE TABLE `t1` (
-  `TABLE_NAME` varchar(64) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL
+  `TABLE_NAME` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general1400_as_ci NOT NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `TABLE_NAME` varchar(64) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci NOT NULL
+  `TABLE_NAME` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general1400_as_ci NOT NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 DROP TABLE t1;
 SET SQL_MODE=DEFAULT;

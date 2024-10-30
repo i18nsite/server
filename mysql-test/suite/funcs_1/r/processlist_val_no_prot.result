@@ -32,7 +32,7 @@ PROCESSLIST	CREATE TEMPORARY TABLE `PROCESSLIST` (
   `INFO_BINARY` blob,
   `TID` bigint(10) NOT NULL,
   `TMP_SPACE_USED` bigint(10) NOT NULL
-)  DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+)  DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general1400_as_ci
 # Ensure that the information about the own connection is correct.
 #--------------------------------------------------------------------------
 

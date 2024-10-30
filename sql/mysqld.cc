@@ -698,6 +698,7 @@ uint temp_pool_set_next()
 
 CHARSET_INFO *system_charset_info, *files_charset_info ;
 CHARSET_INFO *system_charset_info_for_i_s;
+CHARSET_INFO *system_charset_info_for_i_s_mb4;
 CHARSET_INFO *national_charset_info, *table_alias_charset;
 CHARSET_INFO *character_set_filesystem;
 CHARSET_INFO *error_message_charset_info;
@@ -5784,6 +5785,7 @@ int mysqld_main(int argc, char **argv)
   /* Must be initialized early for comparison of options name */
   system_charset_info= &my_charset_utf8mb3_general1400_as_ci;
   system_charset_info_for_i_s= &my_charset_utf8mb3_general_ci;
+  system_charset_info_for_i_s_mb4= &my_charset_utf8mb4_general1400_as_ci;
 
   sys_var_init();
 
@@ -8007,6 +8009,7 @@ static int mysql_init_variables(void)
   /* Character sets */
   system_charset_info= &my_charset_utf8mb3_general1400_as_ci;
   system_charset_info_for_i_s= &my_charset_utf8mb3_general_ci;
+  system_charset_info_for_i_s_mb4= &my_charset_utf8mb4_general1400_as_ci;
   files_charset_info= &my_charset_utf8mb3_general1400_as_ci;
   national_charset_info= &my_charset_utf8mb3_general_ci;
   table_alias_charset= &my_charset_bin;

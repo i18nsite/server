@@ -824,9 +824,9 @@ CALL p1();
 SHOW CREATE TABLE t1;
 Table	Create Table
 t1	CREATE TABLE `t1` (
-  `tables_table_name` varchar(64) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `tables_table_name` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general1400_as_ci DEFAULT NULL,
   `tables_table_rows` bigint(21) unsigned DEFAULT NULL,
-  `processlist_info` longtext CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci DEFAULT NULL,
+  `processlist_info` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_general1400_as_ci DEFAULT NULL,
   `processlist_info_binary` blob DEFAULT NULL
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 DROP TABLE t1;

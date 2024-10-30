@@ -1752,7 +1752,7 @@ GEOMETRY_COLUMNS	CREATE TEMPORARY TABLE `GEOMETRY_COLUMNS` (
   `COORD_DIMENSION` tinyint(2) NOT NULL,
   `MAX_PPR` tinyint(2) NOT NULL,
   `SRID` smallint(5) NOT NULL
-) ENGINE=MEMORY DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MEMORY DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general1400_as_ci
 SHOW CREATE TABLE information_schema.spatial_ref_sys;
 Table	Create Table
 SPATIAL_REF_SYS	CREATE TEMPORARY TABLE `SPATIAL_REF_SYS` (
@@ -1760,7 +1760,7 @@ SPATIAL_REF_SYS	CREATE TEMPORARY TABLE `SPATIAL_REF_SYS` (
   `AUTH_NAME` varchar(512) NOT NULL,
   `AUTH_SRID` int(5) NOT NULL,
   `SRTEXT` varchar(2048) NOT NULL
-) ENGINE=MEMORY DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MEMORY DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general1400_as_ci
 create table t1(g GEOMETRY, pt POINT);
 create table t2(g LINESTRING, pl POLYGON);
 select * from information_schema.geometry_columns where f_table_schema='test';

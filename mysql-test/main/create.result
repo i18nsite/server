@@ -1091,7 +1091,7 @@ t1	CREATE TABLE `t1` (
   `INFO_BINARY` blob,
   `TID` bigint(10) NOT NULL,
   `TMP_SPACE_USED` bigint(10) NOT NULL
-)  DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+)  DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general1400_as_ci
 drop table t1;
 create temporary table t1 like information_schema.processlist;
 show create table t1;
@@ -1117,7 +1117,7 @@ t1	CREATE TEMPORARY TABLE `t1` (
   `INFO_BINARY` blob,
   `TID` bigint(10) NOT NULL,
   `TMP_SPACE_USED` bigint(10) NOT NULL
-)  DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+)  DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general1400_as_ci
 drop table t1;
 create table t1 like information_schema.character_sets;
 show create table t1;
@@ -1127,7 +1127,7 @@ t1	CREATE TABLE `t1` (
   `DEFAULT_COLLATE_NAME` varchar(64) NOT NULL,
   `DESCRIPTION` varchar(60) NOT NULL,
   `MAXLEN` bigint(3) NOT NULL
-) ENGINE=MEMORY DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci
+) ENGINE=MEMORY DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general1400_as_ci
 drop table t1;
 
 # --

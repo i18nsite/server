@@ -8869,7 +8869,7 @@ TABLE *create_schema_table(THD *thd, TABLE_LIST *table_list)
 
   tmp_table_param = new (thd->mem_root) TMP_TABLE_PARAM;
   tmp_table_param->init();
-  tmp_table_param->table_charset= system_charset_info_for_i_s;
+  tmp_table_param->table_charset= system_charset_info_for_i_s_mb4;
   tmp_table_param->field_count= field_count;
   tmp_table_param->schema_table= 1;
   select_lex= table_list->select_lex;

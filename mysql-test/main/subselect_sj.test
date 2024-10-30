@@ -2551,7 +2551,7 @@ drop table t1,t2;
 --echo #
 --echo # MDEV-4335: Unexpected results when selecting on information_schema
 --echo #
-CREATE TABLE t1 (db VARCHAR(64) DEFAULT NULL); 
+CREATE TABLE t1 (db VARCHAR(64) COLLATE utf8mb4_general1400_as_ci DEFAULT NULL); 
 INSERT INTO t1 VALUES ('mysql'),('information_schema'); 
 --sorted_result
 SELECT * FROM t1 WHERE db IN (SELECT `SCHEMA_NAME` FROM information_schema.SCHEMATA); 

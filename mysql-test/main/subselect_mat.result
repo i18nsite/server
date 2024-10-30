@@ -2185,7 +2185,7 @@ id int(11) unsigned NOT NULL AUTO_INCREMENT,
 db varchar(254) NOT NULL DEFAULT '',
 PRIMARY KEY (id),
 UNIQUE KEY db (db)
-) DEFAULT CHARSET=utf8 COLLATE utf8_general_ci;
+) DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_general1400_as_ci;
 INSERT INTO t1 (db) VALUES ('mysqltest1'),('mysqltest2'),('mysqltest3'),('mysqltest4');
 drop database if exists mysqltest1;
 drop database if exists mysqltest2;
@@ -2204,7 +2204,7 @@ mysqltest1
 EXPLAIN EXTENDED
 SELECT db FROM t1 WHERE db IN (SELECT SCHEMA_NAME FROM information_schema.schemata) ORDER BY db DESC;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	filtered	Extra
-1	PRIMARY	t1	index	db	db	764	NULL	4	100.00	Using index; Using temporary; Using filesort
+1	PRIMARY	t1	ALL	db	NULL	NULL	NULL	4	100.00	Using temporary; Using filesort
 1	PRIMARY	schemata	ALL	NULL	NULL	NULL	NULL	NULL	NULL	Using where; FirstMatch(t1); Using join buffer (flat, BNL join)
 Warnings:
 Note	1003	select `test`.`t1`.`db` AS `db` from `test`.`t1` semi join (`information_schema`.`schemata`) where `test`.`t1`.`db` = `information_schema`.`schemata`.`SCHEMA_NAME` order by `test`.`t1`.`db` desc

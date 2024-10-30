@@ -3,7 +3,7 @@
 --source include/have_sequence.inc
 
 delimiter |;
-create function get_index_id(tbl_id int, index_name char(100))
+create function get_index_id(tbl_id int, index_name char(100) collate utf8mb4_general1400_as_ci)
   returns int
 begin
   declare res int;

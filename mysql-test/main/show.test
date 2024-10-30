@@ -17,7 +17,7 @@ show nonexistent;
 --echo #
 --echo # MDEV-21603 Crashing SHOW TABLES with derived table in WHERE condition
 --echo #
-create table t1 (nm varchar(32), a int);
+create table t1 (nm varchar(32) collate utf8mb4_general1400_as_ci, a int);
 insert t1 values ('1',1),('2',2),('3',3);
 
 show tables

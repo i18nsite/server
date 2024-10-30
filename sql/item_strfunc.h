@@ -1154,7 +1154,7 @@ class Item_func_sysconst :public Item_str_func
 {
 public:
   Item_func_sysconst(THD *thd): Item_str_func(thd)
-  { collation.set(system_charset_info_for_i_s, DERIVATION_SYSCONST); }
+  { collation.set(system_charset_info_for_i_s_mb4, DERIVATION_SYSCONST); }
   Item *safe_charset_converter(THD *thd, CHARSET_INFO *tocs) override;
   /*
     Used to create correct Item name in new converted item in
@@ -1240,8 +1240,7 @@ public:
   bool fix_fields(THD *thd, Item **ref) override;
   bool fix_length_and_dec(THD *thd) override
   {
-    max_length= (uint32) (username_char_length +
-                 HOSTNAME_LENGTH + 1) * SYSTEM_CHARSET_MBMAXLEN;
+    fix_char_length((uint32) (username_char_length + HOSTNAME_LENGTH + 1));
     return FALSE;
   }
   LEX_CSTRING func_name_cstring() const override
@@ -1311,7 +1310,7 @@ public:
   bool fix_fields(THD *thd, Item **ref) override;
   bool fix_length_and_dec(THD *thd) override
   {
-    max_length= (uint32) username_char_length * SYSTEM_CHARSET_MBMAXLEN;
+    fix_char_length((uint32) username_char_length);
     return FALSE;
   }
   int save_in_field(Field *field, bool no_conversions) override
@@ -2043,8 +2042,8 @@ public:
   Item_func_expr_str_metadata(THD *thd, Item *a): Item_str_func(thd, a) { }
   bool fix_length_and_dec(THD *thd) override
   {
-     collation.set(system_charset_info_for_i_s, DERIVATION_SYSCONST);
-     max_length= 64 * collation.collation->mbmaxlen; // should be enough
+     collation.set(system_charset_info_for_i_s_mb4, DERIVATION_SYSCONST);
+     fix_char_length(64); // should be enough
      base_flags&= ~item_base_t::MAYBE_NULL;
      return FALSE;
   };

@@ -3893,7 +3893,7 @@ CREATE TEMPORARY TABLE `TABLES` (
   `TABLE_COMMENT` varchar(2048) NOT NULL,
   `MAX_INDEX_LENGTH` bigint(21) unsigned,
   `TEMPORARY` varchar(1)
-) ENGINE=MEMORY DEFAULT CHARSET=utf8mb3 COLLATE=utf8mb3_general_ci;
+) ENGINE=MEMORY DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general1400_as_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 #
 # Bug#19745 mysqldump --xml produces invalid xml

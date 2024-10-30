@@ -2054,7 +2054,7 @@ drop table t1, t2;
 --echo #
 --echo # MDEV-24593 Signal 11 when group by primary key of table joined to information_schema.columns
 --echo #
-create table t1 (f varchar(64) primary key);
+create table t1 (f varchar(64) collate utf8mb4_general1400_as_ci primary key);
 select f from information_schema.columns i
 inner join t1 on f=i.column_name
 group by f;
