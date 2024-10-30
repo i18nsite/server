@@ -24,13 +24,11 @@ Random numbers and hashing
 Created 1/20/1994 Heikki Tuuri
 ***********************************************************************/
 
-#ifndef ut0rnd_h
-#define ut0rnd_h
+#pragma once
 
 #include "ut0byte.h"
 #include <my_sys.h>
 
-#ifndef UNIV_INNOCHECKSUM
 /** Seed value of ut_rnd_gen() */
 extern std::atomic<uint32_t> ut_rnd_current;
 
@@ -70,27 +68,22 @@ inline ulint ut_rnd_interval(ulint n)
   return n > 1 ? static_cast<ulint>(ut_rnd_gen() % n) : 0;
 }
 
-/*******************************************************//**
-The following function generates a hash value for a ulint integer
-to a hash table of size table_size, which should be a prime or some
+/** Generate a hash value.
+@param key          initial key
+@param table_size   hash array size, preferrably a prime
 random number to work reliably.
 @return hash value */
-UNIV_INLINE
-ulint
-ut_hash_ulint(
-/*==========*/
-	ulint	 key,		/*!< in: value to be hashed */
-	ulint	 table_size);	/*!< in: hash table size */
+inline ulint ut_hash_ulint(ulint key, ulint table_size) noexcept
+{
+  return (key ^ 1653893711) % table_size;
+}
+
 # if SIZEOF_SIZE_T < 8
-/*************************************************************//**
-Folds a 64-bit integer.
-@return folded value */
-UNIV_INLINE
-ulint
-ut_fold_ull(
-/*========*/
-	ib_uint64_t	d)	/*!< in: 64-bit integer */
-	MY_ATTRIBUTE((const));
+inline size_t ut_fold_ull(uint64_t d) noexcept
+{
+  size_t n1= uint32_t(d), n2= uint32_t(d >> 32);
+  return ((((n1 ^ n2 ^ 1653893711) << 8) + n1) ^ 1463735687) + n2;
+}
 # else
 #  define ut_fold_ull(d) d
 # endif
@@ -103,30 +96,3 @@ ut_find_prime(
 /*==========*/
 	ulint	n)	/*!< in: positive number > 100 */
 	MY_ATTRIBUTE((const));
-
-#endif /* !UNIV_INNOCHECKSUM */
-
-/*************************************************************//**
-Folds a pair of ulints.
-@return folded value */
-UNIV_INLINE
-ulint
-ut_fold_ulint_pair(
-/*===============*/
-	ulint	n1,	/*!< in: ulint */
-	ulint	n2)	/*!< in: ulint */
-	MY_ATTRIBUTE((const));
-/*************************************************************//**
-Folds a binary string.
-@return folded value */
-UNIV_INLINE
-ulint
-ut_fold_binary(
-/*===========*/
-	const byte*	str,	/*!< in: string of bytes */
-	ulint		len)	/*!< in: length */
-	MY_ATTRIBUTE((pure));
-
-#include "ut0rnd.inl"
-
-#endif
