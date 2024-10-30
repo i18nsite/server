@@ -1511,8 +1511,9 @@ release_tree:
       ut_ad(tuple->is_metadata() ||
             (tuple->is_metadata(tuple->info_bits ^ REC_STATUS_INSTANT)));
     else if (index()->table->is_temporary());
-    else if (!rec_is_metadata(page_cur.rec, *index()))
-      btr_search_info_update(index(), this);
+    else if (!rec_is_metadata(page_cur.rec, *index()) &&
+             index()->search_info.hash_analysis_useful())
+      search_info_update();
 #endif /* BTR_CUR_HASH_ADAPT */
 
     goto func_exit;
@@ -1756,8 +1757,9 @@ dberr_t btr_cur_t::pessimistic_search_leaf(const dtuple_t *tuple,
         ut_ad(tuple->is_metadata() ||
               (tuple->is_metadata(tuple->info_bits ^ REC_STATUS_INSTANT)));
       else if (index()->table->is_temporary());
-      else if (!rec_is_metadata(page_cur.rec, *index()))
-        btr_search_info_update(index(), this);
+      else if (!rec_is_metadata(page_cur.rec, *index()) &&
+               index()->search_info.hash_analysis_useful())
+        search_info_update();
 #endif /* BTR_CUR_HASH_ADAPT */
       err= DB_SUCCESS;
     }

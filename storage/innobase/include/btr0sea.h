@@ -24,8 +24,7 @@ The index tree adaptive search
 Created 2/17/1996 Heikki Tuuri
 *************************************************************************/
 
-#ifndef btr0sea_h
-#define btr0sea_h
+#pragma once
 
 #include "dict0dict.h"
 #ifdef BTR_CUR_HASH_ADAPT
@@ -37,15 +36,6 @@ extern mysql_pfs_key_t btr_search_latch_key;
 
 #define btr_search_sys_create() btr_search.create()
 #define btr_search_sys_free() btr_search.free()
-
-/*********************************************************************//**
-Updates the search info. */
-UNIV_INLINE
-void
-btr_search_info_update(
-/*===================*/
-	dict_index_t*	index,	/*!< in: index of the cursor */
-	btr_cur_t*	cursor);/*!< in: cursor which was just positioned */
 
 /** Tries to guess the right search position based on the hash search info
 of the index. Note that if mode is PAGE_CUR_LE, which is used in inserts,
@@ -87,7 +77,7 @@ btr_search_move_or_delete_hash_entries(
 @param[in]	garbage_collect	drop ahi only if the index is marked
 				as freed */
 void btr_search_drop_page_hash_index(buf_block_t* block,
-				     bool garbage_collect);
+				     bool garbage_collect) noexcept;
 
 /** Drop possible adaptive hash index entries when a page is evicted
 from the buffer pool or freed in a file, or the index is being dropped.
@@ -117,43 +107,18 @@ void btr_search_update_hash_on_delete(btr_cur_t *cursor);
 @return true if ok */
 bool btr_search_validate(THD *thd);
 
-/** Lock all search latches in exclusive mode. */
-static inline void btr_search_x_lock_all();
-
-/** Unlock all search latches from exclusive mode. */
-static inline void btr_search_x_unlock_all();
-
-/** Lock all search latches in shared mode. */
-static inline void btr_search_s_lock_all();
-
-/** Unlock all search latches from shared mode. */
-static inline void btr_search_s_unlock_all();
-
 # ifdef UNIV_DEBUG
 /** @return if the index is marked as freed */
 bool btr_search_check_marked_free_index(const buf_block_t *block);
 # endif /* UNIV_DEBUG */
-#else /* BTR_CUR_HASH_ADAPT */
-# define btr_search_sys_create()
-# define btr_search_sys_free()
-# define btr_search_drop_page_hash_index(block, garbage_collect)
-# define btr_search_s_lock_all(index)
-# define btr_search_s_unlock_all(index)
-# define btr_search_info_update(index, cursor)
-# define btr_search_move_or_delete_hash_entries(new_block, block)
-# define btr_search_update_hash_on_insert(cursor)
-# define btr_search_update_hash_on_delete(cursor)
-# ifdef UNIV_DEBUG
-#  define btr_search_check_marked_free_index(block)
-# endif /* UNIV_DEBUG */
-#endif /* BTR_CUR_HASH_ADAPT */
 
-#ifdef BTR_CUR_HASH_ADAPT
+struct ahi_node;
+
 /** The hash index system */
 struct btr_sea
 {
-  /** innodb_adaptive_hash_index */
-  Atomic_relaxed<my_bool> enabled;
+  /** the actual value of innodb_adaptive_hash_index */
+  Atomic_relaxed<bool> enabled;
 
   /** Disable the adaptive hash search system and empty the index. */
   void disable() noexcept;
@@ -169,9 +134,11 @@ struct btr_sea
     alignas(CPU_LEVEL1_DCACHE_LINESIZE) srw_spin_lock latch;
     /** map of dtuple_fold() or rec_fold() to rec_t* in buf_page_t::frame */
     hash_table_t table;
-    /** memory heap for table */
-    mem_heap_t *hea;
-    /** a cached block */
+    /** latch protecting blocks, spare */
+    srw_mutex blocks_mutex;
+    /** allocated blocks */
+    UT_LIST_BASE_NODE_T(buf_page_t) blocks;
+    /** a cached block to extend blocks */
     Atomic_relaxed<buf_block_t*> spare;
 
     inline void init() noexcept;
@@ -182,19 +149,28 @@ struct btr_sea
 
     inline void free() noexcept;
 
+    /** Ensure that there is a spare block for a future insert() */
+    void prepare_insert() noexcept;
+
+    /** Clean up after erasing an AHI node
+    @param erase   node being erased
+    @return buffer block to be freed
+    @retval nullptr if no buffer block was freed */
+    buf_block_t *cleanup_after_erase(ahi_node *erase) noexcept;
+
     __attribute__((nonnull))
-#if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
+# if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
     /** Insert or replace an entry into the hash table.
     @param fold  hash value of rec
     @param rec   B-tree leaf page record
     @param block the buffer block that contains rec */
     void insert(ulint fold, const rec_t *rec, buf_block_t *block) noexcept;
-#else
+# else
     /** Insert or replace an entry into the hash table.
     @param fold  hash value of data
     @param rec   B-tree leaf page record */
     void insert(ulint fold, const rec_t *rec) noexcept;
-#endif
+# endif
 
     /** Delete a pointer to a record if it exists.
     @param fold   hash value of rec
@@ -221,27 +197,46 @@ struct btr_sea
 /** The adaptive hash index */
 extern btr_sea btr_search;
 
+/** Lock all search latches in exclusive mode. */
+static inline void btr_search_x_lock_all() noexcept
+{
+  btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
+}
+
+/** Unlock all search latches from exclusive mode. */
+static inline void btr_search_x_unlock_all() noexcept
+{
+  btr_search.parts.latch.wr_unlock();
+}
+
+/** Lock all search latches in shared mode. */
+static inline void btr_search_s_lock_all() noexcept
+{
+  btr_search.parts.latch.rd_lock(SRW_LOCK_CALL);
+}
+
+/** Unlock all search latches from shared mode. */
+static inline void btr_search_s_unlock_all() noexcept
+{
+  btr_search.parts.latch.rd_unlock();
+}
+
 #ifdef UNIV_SEARCH_PERF_STAT
 /** Number of successful adaptive hash index lookups */
 extern ulint	btr_search_n_succ;
 /** Number of failed adaptive hash index lookups */
 extern ulint	btr_search_n_hash_fail;
 #endif /* UNIV_SEARCH_PERF_STAT */
-
-/** Limit of consecutive searches for trying a search shortcut on the search
-pattern */
-#define BTR_SEARCH_ON_PATTERN_LIMIT	3
-
-/** Limit of consecutive searches for trying a search shortcut using
-the hash index */
-#define BTR_SEARCH_ON_HASH_LIMIT	3
-
-/** We do this many searches before trying to keep the search latch
-over calls from MySQL. If we notice someone waiting for the latch, we
-again set this much timeout. This is to reduce contention. */
-#define BTR_SEA_TIMEOUT			10000
+#else /* BTR_CUR_HASH_ADAPT */
+# define btr_search_sys_create()
+# define btr_search_sys_free()
+# define btr_search_drop_page_hash_index(block, garbage_collect)
+# define btr_search_s_lock_all(index)
+# define btr_search_s_unlock_all(index)
+# define btr_search_move_or_delete_hash_entries(new_block, block)
+# define btr_search_update_hash_on_insert(cursor)
+# define btr_search_update_hash_on_delete(cursor)
+# ifdef UNIV_DEBUG
+#  define btr_search_check_marked_free_index(block)
+# endif /* UNIV_DEBUG */
 #endif /* BTR_CUR_HASH_ADAPT */
-
-#include "btr0sea.inl"
-
-#endif
