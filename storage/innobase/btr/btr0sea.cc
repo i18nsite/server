@@ -179,10 +179,19 @@ static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
       const dict_col_t* col = field->col;
       if (col->is_nullable())
       {
+        const int is_null{*nulls & null_mask};
+#if defined __GNUC__ && !defined __clang__
+# pragma GCC diagnostic push
+# if __GNUC__ < 12 || defined WITH_UBSAN
+#  pragma GCC diagnostic ignored "-Wconversion"
+# endif
+#endif
+        null_mask<<= 1;
+#if defined __GNUC__ && !defined __clang__
+# pragma GCC diagnostic pop
+#endif
         if (UNIV_UNLIKELY(!null_mask))
           null_mask= 1, nulls--;
-        const int is_null{*nulls & null_mask};
-        null_mask<<= 1;
         if (is_null)
         {
           len= 0;
