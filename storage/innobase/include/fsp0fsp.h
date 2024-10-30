@@ -579,6 +579,7 @@ void fsp_system_tablespace_truncate();
 /** Truncate the temporary tablespace */
 void fsp_shrink_temp_space();
 
+extern ulonglong innodb_binlog_state_interval;
 extern void fsp_binlog_trx(trx_t *trx, mtr_t *mtr);
 class handler_binlog_reader;
 extern bool innobase_binlog_write_direct(IO_CACHE *cache, size_t main_size,
