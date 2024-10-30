@@ -146,30 +146,100 @@ before hash index building is started */
 #define BTR_SEARCH_BUILD_LIMIT		100U
 
 /** Compute a hash value of a record in a page.
-@param id       index tree ID
 @param rec      index record
+@param index    index tree
 @param n_fields number of complete fields to fold
 @param n_bytes  number of bytes to fold in the last field
-@param offsets  return value of rec_get_offsets(rec)
 @return the hash value */
-static uint32_t rec_fold(index_id_t id, const rec_t *rec,
-                         ulint n_fields, ulint n_bytes,
-                         const rec_offs *offsets) noexcept
+static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
+                         size_t n_fields, size_t n_bytes) noexcept
 {
-  ut_ad(rec_offs_validate(rec, NULL, offsets));
-  ut_ad(rec_validate(rec, offsets));
   ut_ad(page_rec_is_leaf(rec));
-  ut_ad(!page_rec_is_metadata(rec));
-  ut_ad(n_fields > 0 || n_bytes > 0);
-  ut_ad(n_fields <= rec_offs_n_fields(offsets) + !n_bytes);
+  ut_ad(page_rec_is_user_rec(rec));
+  ut_ad(!rec_is_metadata(rec, index));
+  ut_ad(index.n_uniq <= index.n_core_fields);
+  size_t n_f= n_fields + !!n_bytes;
+  ut_ad(n_f > 0);
+  ut_ad(n_f <= index.n_uniq);
 
-  size_t n= get_value(rec_offs_base(offsets)[n_fields]);
-  if (!n_bytes);
-  else if (!n_fields)
-    n= std::min(n_bytes, n);
+  size_t n;
+
+  if (index.table->not_redundant())
+  {
+    const unsigned n_core_null_bytes= index.n_core_null_bytes;
+    const byte *nulls= rec - REC_N_NEW_EXTRA_BYTES;
+    const byte *lens= --nulls - n_core_null_bytes;
+    byte null_mask= 1;
+    n= 0;
+
+    const dict_field_t *field = index.fields;
+    size_t len;
+    do
+    {
+      const dict_col_t* col = field->col;
+      if (col->is_nullable())
+      {
+        if (UNIV_UNLIKELY(!null_mask))
+          null_mask= 1, nulls--;
+        const int is_null{*nulls & null_mask};
+        null_mask<<= 1;
+        if (is_null)
+        {
+          len= 0;
+          continue;
+        }
+      }
+
+      len= field->fixed_len;
+
+      if (!len)
+      {
+        len= *lens--;
+        if (UNIV_UNLIKELY(len & 0x80) && DATA_BIG_COL(col))
+        {
+          len<<= 8;
+          len|= *lens--;
+          ut_ad(len <= 0x3fff);
+        }
+      }
+
+      n+= len;
+    }
+    while (field++, --n_f);
+
+    if (n_bytes)
+      n+= std::min(n_bytes, len) - len;
+  }
   else
-    n+= std::min(n_bytes, n - get_value(rec_offs_base(offsets)[n_fields - 1]));
-  return my_crc32c(uint32_t(ut_fold_ull(id)), rec, n);
+  {
+    ut_ad(n_f <= rec_get_n_fields_old(rec));
+    if (rec_get_1byte_offs_flag(rec))
+    {
+      n= rec_1_get_field_end_info(rec, n_f - 1);
+      if (!n_bytes);
+      else if (!n_fields)
+        n= std::min(n_bytes, n);
+      else
+      {
+        size_t len= n - rec_1_get_field_end_info(rec, n_f - 2);
+        n+= std::min(n_bytes, n - len) - len;
+      }
+    }
+    else
+    {
+      n= rec_2_get_field_end_info(rec, n_f - 1);
+      if (!n_bytes);
+      else if (!n_fields)
+        n= std::min(n_bytes, n);
+      else
+      {
+        size_t len= n - rec_2_get_field_end_info(rec, n_f - 2);
+        n+= std::min(n_bytes, n - len) - len;
+      }
+    }
+  }
+
+  return my_crc32c(uint32_t(ut_fold_ull(index.id)), rec, n);
 }
 
 /** Determine the number of accessed key fields.
@@ -792,35 +862,16 @@ static void btr_search_update_hash_ref(const btr_cur_t* cursor) noexcept
 	    && (block->curr_n_fields == index->search_info.n_fields)
 	    && (block->curr_n_bytes == index->search_info.n_bytes)
 	    && (block->curr_left_side == index->search_info.left_side)
+            && !page_cur_is_before_first(&cursor->page_cur)
+            && !page_cur_is_after_last(&cursor->page_cur)
 	    && btr_search.enabled) {
-		mem_heap_t*	heap		= NULL;
-		rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
-		rec_offs_init(offsets_);
-
 		const rec_t* rec = btr_cur_get_rec(cursor);
-
-		if (!page_rec_is_user_rec(rec)) {
-			goto func_exit;
-		}
-
-		uint32_t fold = rec_fold(
-			index->id,
-			rec,
-			block->curr_n_fields,
-			block->curr_n_bytes,
-			rec_get_offsets(rec, index, offsets_,
-					index->n_core_fields,
-					ULINT_UNDEFINED, &heap));
-		if (UNIV_LIKELY_NULL(heap)) {
-			mem_heap_free(heap);
-		}
-
+		uint32_t fold = rec_fold(rec, *index, block->curr_n_fields,
+					 block->curr_n_bytes);
 		ha_insert_for_fold(part, fold, block, rec);
-
 		MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
 	}
 
-func_exit:
 	part->latch.wr_unlock();
 }
 
@@ -1321,9 +1372,6 @@ void btr_search_drop_page_hash_index(buf_block_t* block,
 {
 	ulint			n_fields;
 	ulint			n_bytes;
-	const rec_t*		rec;
-	mem_heap_t*		heap;
-	rec_offs*		offsets;
 
 retry:
 	if (!block->index) {
@@ -1405,7 +1453,7 @@ retry:
 	/* Calculate and cache fold values into an array for fast deletion
 	from the hash index */
 
-	rec = page_get_infimum_rec(page);
+	const rec_t *rec = page_get_infimum_rec(page);
 	rec = page_rec_get_next_low(rec, page_is_comp(page));
 
 	uint32_t* folds;
@@ -1425,8 +1473,6 @@ retry:
 
 	folds = static_cast<uint32_t*>(
 		ut_malloc_nokey(n_recs * sizeof *folds));
-	heap = nullptr;
-	offsets = nullptr;
 
 	while (rec) {
 		if (n_cached >= n_recs) {
@@ -1434,12 +1480,7 @@ retry:
 			break;
 		}
 		ut_ad(page_rec_is_user_rec(rec));
-		offsets = rec_get_offsets(
-			rec, index, offsets, index->n_core_fields,
-			btr_search_get_n_fields(n_fields, n_bytes),
-			&heap);
-		const uint32_t fold = rec_fold(index_id, rec,
-					       n_fields, n_bytes, offsets);
+		const uint32_t fold = rec_fold(rec, *index, n_fields, n_bytes);
 
 		if (fold == prev_fold && prev_fold != 0) {
 
@@ -1456,10 +1497,6 @@ next_rec:
 			break;
 		}
 		prev_fold = fold;
-	}
-
-	if (UNIV_LIKELY_NULL(heap)) {
-		mem_heap_free(heap);
 	}
 
 all_deleted:
@@ -1567,9 +1604,6 @@ btr_search_build_page_hash_index(
 	ulint		n_recs;
 	uint32_t*	folds;
 	const rec_t**	recs;
-	mem_heap_t*	heap		= NULL;
-	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
-	rec_offs*	offsets		= offsets_;
 
 	ut_ad(!index->table->is_temporary());
 
@@ -1577,7 +1611,6 @@ btr_search_build_page_hash_index(
 		return;
 	}
 
-	rec_offs_init(offsets_);
 	ut_ad(index);
 	ut_ad(block->page.id().space() == index->table->space_id);
 	ut_ad(!dict_index_is_ibuf(index));
@@ -1631,6 +1664,7 @@ btr_search_build_page_hash_index(
 		rec = page_rec_get_next_const(rec);
 		if (!rec || !--n_recs) return;
 	}
+	if (page_rec_is_supremum(rec)) return;
 
 	/* Calculate and cache fold values and corresponding records into
 	an array for fast insertion to the hash index */
@@ -1643,14 +1677,7 @@ btr_search_build_page_hash_index(
 
 	ut_a(index->id == btr_page_get_index_id(page));
 
-	offsets = rec_get_offsets(
-		rec, index, offsets, index->n_core_fields,
-		btr_search_get_n_fields(n_fields, n_bytes),
-		&heap);
-	ut_ad(page_rec_is_supremum(rec)
-	      || n_fields == rec_offs_n_fields(offsets) - (n_bytes > 0));
-
-	uint32_t fold = rec_fold(index->id, rec, n_fields, n_bytes, offsets);
+	uint32_t fold = rec_fold(rec, *index, n_fields, n_bytes);
 
 	if (left_side) {
 		folds[n_cached] = fold;
@@ -1671,11 +1698,8 @@ btr_search_build_page_hash_index(
 			break;
 		}
 
-		offsets = rec_get_offsets(
-			next_rec, index, offsets, index->n_core_fields,
-			btr_search_get_n_fields(n_fields, n_bytes), &heap);
-		uint32_t next_fold = rec_fold(index->id, next_rec, n_fields,
-					      n_bytes, offsets);
+		uint32_t next_fold = rec_fold(next_rec, *index, n_fields,
+					      n_bytes);
 
 		if (fold != next_fold) {
 			/* Insert an entry into the hash index */
@@ -1738,9 +1762,6 @@ exit_func:
 
 	ut_free(folds);
 	ut_free(recs);
-	if (UNIV_LIKELY_NULL(heap)) {
-		mem_heap_free(heap);
-	}
 }
 
 void btr_cur_t::search_info_update() const noexcept
@@ -1856,9 +1877,6 @@ void btr_search_update_hash_on_delete(btr_cur_t *cursor)
 	buf_block_t*	block;
 	const rec_t*	rec;
 	dict_index_t*	index;
-	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
-	mem_heap_t*	heap		= NULL;
-	rec_offs_init(offsets_);
 
 	ut_ad(page_is_leaf(btr_cur_get_page(cursor)));
 
@@ -1892,14 +1910,8 @@ void btr_search_update_hash_on_delete(btr_cur_t *cursor)
 
 	rec = btr_cur_get_rec(cursor);
 
-	uint32_t fold = rec_fold(
-		index->id, rec,
-		block->curr_n_fields, block->curr_n_bytes,
-		rec_get_offsets(rec, index, offsets_, index->n_core_fields,
-				ULINT_UNDEFINED, &heap));
-	if (UNIV_LIKELY_NULL(heap)) {
-		mem_heap_free(heap);
-	}
+	uint32_t fold = rec_fold(rec, *index,
+                                 block->curr_n_fields, block->curr_n_bytes);
 
 	auto part = &btr_search.parts;
 
@@ -2002,10 +2014,6 @@ void btr_search_update_hash_on_insert(btr_cur_t *cursor)
 	const rec_t*	next_rec;
 	ulint		n_fields;
 	ulint		n_bytes;
-	mem_heap_t*	heap		= NULL;
-	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
-	rec_offs*	offsets		= offsets_;
-	rec_offs_init(offsets_);
 
 	ut_ad(page_is_leaf(btr_cur_get_page(cursor)));
 
@@ -2050,19 +2058,11 @@ drop:
 	next_rec = page_rec_get_next_const(ins_rec);
 	if (UNIV_UNLIKELY(!next_rec)) goto drop;
 
-	offsets = rec_get_offsets(ins_rec, index, offsets,
-				  index->n_core_fields,
-				  ULINT_UNDEFINED, &heap);
-	uint32_t ins_fold = rec_fold(index->id, ins_rec, n_fields, n_bytes,
-				     offsets);
+	uint32_t ins_fold = rec_fold(ins_rec, *index, n_fields, n_bytes);
 	uint32_t next_fold = 0, fold;
 
 	if (!page_rec_is_supremum(next_rec)) {
-		offsets = rec_get_offsets(
-			next_rec, index, offsets, index->n_core_fields,
-			btr_search_get_n_fields(n_fields, n_bytes), &heap);
-		next_fold = rec_fold(index->id, next_rec, n_fields, n_bytes,
-				     offsets);
+		next_fold = rec_fold(next_rec, *index, n_fields, n_bytes);
 	}
 
 	btr_sea::partition* const part= &btr_search.parts;
@@ -2070,10 +2070,7 @@ drop:
 	part->prepare_insert();
 
 	if (!page_rec_is_infimum(rec) && !rec_is_metadata(rec, *index)) {
-		offsets = rec_get_offsets(
-			rec, index, offsets, index->n_core_fields,
-			btr_search_get_n_fields(n_fields, n_bytes), &heap);
-		fold = rec_fold(index->id, rec, n_fields, n_bytes, offsets);
+		fold = rec_fold(rec, *index, n_fields, n_bytes);
 	} else {
 		if (left_side) {
 			locked = true;
@@ -2152,9 +2149,6 @@ function_exit:
 	if (locked) {
 		btr_search.parts.latch.wr_unlock();
 	}
-	if (UNIV_LIKELY_NULL(heap)) {
-		mem_heap_free(heap);
-	}
 }
 
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
@@ -2193,27 +2187,17 @@ bool btr_search_validate(THD *thd)
 	bool		ok		= true;
 	ulint		i;
 	ulint		cell_count;
-	mem_heap_t*	heap		= NULL;
-	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
-	rec_offs*	offsets		= offsets_;
 
 	btr_search_x_lock_all();
 	if (!btr_search.enabled || (thd && thd_kill_level(thd))) {
 func_exit:
 		btr_search_x_unlock_all();
-
-		if (UNIV_LIKELY_NULL(heap)) {
-			mem_heap_free(heap);
-		}
-
 		return ok;
 	}
 
 	/* How many cells to check before temporarily releasing
 	search latches. */
 	ulint		chunk_size = 10000;
-
-	rec_offs_init(offsets_);
 
 	mysql_mutex_lock(&buf_pool.mutex);
 
@@ -2290,18 +2274,10 @@ state_ok:
 
 			page_index_id = btr_page_get_index_id(page);
 
-			offsets = rec_get_offsets(
-				node->rec, block->index, offsets,
-				block->index->n_core_fields,
-				btr_search_get_n_fields(block->curr_n_fields,
-							block->curr_n_bytes),
-				&heap);
-
 			const uint32_t fold = rec_fold(
-				page_index_id, node->rec,
+				node->rec, *block->index,
 				block->curr_n_fields,
-				block->curr_n_bytes,
-				offsets);
+				block->curr_n_bytes);
 
 			if (node->fold != fold) {
 				ok = FALSE;
@@ -2315,16 +2291,6 @@ state_ok:
 					<< ", index id " << page_index_id
 					<< ", node fold " << node->fold
 					<< ", rec fold " << fold;
-
-				fputs("InnoDB: Record ", stderr);
-				rec_print_new(stderr, node->rec, offsets);
-				fprintf(stderr, "\nInnoDB: on that page."
-					" Page mem address %p, is hashed %p,"
-					" n fields %lu\n"
-					"InnoDB: side %lu\n",
-					(void*) page, (void*) block->index,
-					(ulong) block->curr_n_fields,
-					(ulong) block->curr_left_side);
 				ut_ad(0);
 			}
 		}
