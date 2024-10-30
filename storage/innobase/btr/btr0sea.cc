@@ -79,6 +79,7 @@ inline void btr_sea::partition::clear() noexcept
   if (buf_block_t *b= spare)
   {
     spare= nullptr;
+    MEM_MAKE_ADDRESSABLE(b->page.frame, srv_page_size);
     buf_pool.free_block(b);
   }
   ut_free(table.array);
@@ -89,6 +90,7 @@ inline void btr_sea::partition::clear() noexcept
     UT_LIST_REMOVE(blocks, b);
     ut_ad(b->free_offset);
     b->hash= nullptr;
+    MEM_MAKE_ADDRESSABLE(b->frame, srv_page_size);
     buf_pool.free_block(reinterpret_cast<buf_block_t*>(b));
   }
 }
@@ -242,7 +244,11 @@ void btr_sea::partition::prepare_insert() noexcept
     buf_block_t *block= buf_block_alloc();
     blocks_mutex.wr_lock();
     if (!spare && btr_search.enabled)
-      spare= block, block= nullptr;
+    {
+      MEM_NOACCESS(block->page.frame, srv_page_size);
+      spare= block;
+      block= nullptr;
+    }
     blocks_mutex.wr_unlock();
     if (block)
       buf_pool.free_block(block);
@@ -570,7 +576,16 @@ void btr_sea::partition::insert(ulint fold, const rec_t *rec) noexcept
     if (last && last->free_offset < srv_page_size - sizeof *node)
     {
       node= reinterpret_cast<ahi_node*>(last->frame + last->free_offset);
+#if defined __GNUC__ && !defined __clang__
+# pragma GCC diagnostic push
+# if __GNUC__ < 12 || defined WITH_UBSAN
+#  pragma GCC diagnostic ignored "-Wconversion"
+# endif
+#endif
       last->free_offset+= sizeof *node;
+#if defined __GNUC__ && !defined __clang__
+# pragma GCC diagnostic pop
+#endif
       MEM_MAKE_ADDRESSABLE(node, sizeof *node);
     }
     else
@@ -586,7 +601,8 @@ void btr_sea::partition::insert(ulint fold, const rec_t *rec) noexcept
       last->free_offset= sizeof *node;
       node= reinterpret_cast<ahi_node*>(last->frame);
       MEM_UNDEFINED(last->frame, srv_page_size);
-      MEM_NOACCESS(last->frame + sizeof *node, srv_page_size - sizeof *node);
+      MEM_MAKE_ADDRESSABLE(node, sizeof *node);
+      MEM_NOACCESS(node + 1, srv_page_size - sizeof *node);
     }
     blocks_mutex.wr_unlock();
   }
@@ -638,11 +654,23 @@ buf_block_t *btr_sea::partition::cleanup_after_erase(ahi_node *erase) noexcept
 
   buf_block_t *freed= nullptr;
 
+#if defined __GNUC__ && !defined __clang__
+# pragma GCC diagnostic push
+# if __GNUC__ < 12 || defined WITH_UBSAN
+#  pragma GCC diagnostic ignored "-Wconversion"
+# endif
+#endif
   /* We may be able to shrink or free the last block */
   if (!(last->free_offset-= uint16_t(sizeof *erase)))
+#if defined __GNUC__ && !defined __clang__
+# pragma GCC diagnostic pop
+#endif
   {
     if (spare)
+    {
       freed= reinterpret_cast<buf_block_t*>(last);
+      MEM_MAKE_ADDRESSABLE(last->frame, srv_page_size);
+    }
     else
       spare= reinterpret_cast<buf_block_t*>(last);
     UT_LIST_REMOVE(blocks, last);
