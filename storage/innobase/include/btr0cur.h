@@ -720,12 +720,14 @@ struct btr_cur_t {
 					left at the time cursor positioned;
 					only used internally in searches: not
 					defined after the search */
-	ulint		n_fields;	/*!< prefix length used in a hash
+#ifdef BTR_CUR_HASH_ADAPT
+	uint16_t	n_fields;	/*!< prefix length used in a hash
 					search if hash_node != NULL */
-	ulint		n_bytes;	/*!< hash prefix bytes if hash_node !=
+	uint16_t	n_bytes;	/*!< hash prefix bytes if hash_node !=
 					NULL */
-	ulint		fold;		/*!< fold value used in the search if
+	uint32_t	fold;		/*!< fold value used in the search if
 					flag is BTR_CUR_HASH */
+#endif
 	/* @} */
 	btr_path_t*	path_arr;	/*!< in estimating the number of
 					rows in range, we store in this array

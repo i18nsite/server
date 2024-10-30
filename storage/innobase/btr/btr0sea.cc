@@ -50,8 +50,8 @@ mysql_pfs_key_t	btr_search_latch_key;
 btr_sea btr_search;
 
 struct ahi_node {
-  /** rec_fold(rec) */
-  ulint fold;
+  /** CRC-32C of the rec prefix */
+  uint32_t fold;
   /** pointer to next record in the hash bucket chain, or nullptr  */
   ahi_node *next;
   /** B-tree index leaf page record */
@@ -146,70 +146,30 @@ before hash index building is started */
 #define BTR_SEARCH_BUILD_LIMIT		100U
 
 /** Compute a hash value of a record in a page.
-@param[in]	rec		index record
-@param[in]	offsets		return value of rec_get_offsets()
-@param[in]	n_fields	number of complete fields to fold
-@param[in]	n_bytes		number of bytes to fold in the last field
-@param[in]	index_id	index tree ID
+@param id       index tree ID
+@param rec      index record
+@param n_fields number of complete fields to fold
+@param n_bytes  number of bytes to fold in the last field
+@param offsets  return value of rec_get_offsets(rec)
 @return the hash value */
-static inline
-ulint
-rec_fold(
-	const rec_t*	rec,
-	const rec_offs*	offsets,
-	ulint		n_fields,
-	ulint		n_bytes,
-	index_id_t	tree_id)
+static uint32_t rec_fold(index_id_t id, const rec_t *rec,
+                         ulint n_fields, ulint n_bytes,
+                         const rec_offs *offsets) noexcept
 {
-	ulint		i;
-	const byte*	data;
-	ulint		len;
-	ulint		fold;
-	ulint		n_fields_rec;
+  ut_ad(rec_offs_validate(rec, NULL, offsets));
+  ut_ad(rec_validate(rec, offsets));
+  ut_ad(page_rec_is_leaf(rec));
+  ut_ad(!page_rec_is_metadata(rec));
+  ut_ad(n_fields > 0 || n_bytes > 0);
+  ut_ad(n_fields <= rec_offs_n_fields(offsets) + !n_bytes);
 
-	ut_ad(rec_offs_validate(rec, NULL, offsets));
-	ut_ad(rec_validate(rec, offsets));
-	ut_ad(page_rec_is_leaf(rec));
-	ut_ad(!page_rec_is_metadata(rec));
-	ut_ad(n_fields > 0 || n_bytes > 0);
-
-	n_fields_rec = rec_offs_n_fields(offsets);
-	ut_ad(n_fields <= n_fields_rec);
-	ut_ad(n_fields < n_fields_rec || n_bytes == 0);
-
-	if (n_fields > n_fields_rec) {
-		n_fields = n_fields_rec;
-	}
-
-	if (n_fields == n_fields_rec) {
-		n_bytes = 0;
-	}
-
-	fold = ut_fold_ull(tree_id);
-
-	for (i = 0; i < n_fields; i++) {
-		data = rec_get_nth_field(rec, offsets, i, &len);
-
-		if (len != UNIV_SQL_NULL) {
-			fold = ut_fold_ulint_pair(fold,
-						  ut_fold_binary(data, len));
-		}
-	}
-
-	if (n_bytes > 0) {
-		data = rec_get_nth_field(rec, offsets, i, &len);
-
-		if (len != UNIV_SQL_NULL) {
-			if (len > n_bytes) {
-				len = n_bytes;
-			}
-
-			fold = ut_fold_ulint_pair(fold,
-						  ut_fold_binary(data, len));
-		}
-	}
-
-	return(fold);
+  size_t n= get_value(rec_offs_base(offsets)[n_fields]);
+  if (!n_bytes);
+  else if (!n_fields)
+    n= std::min(n_bytes, n);
+  else
+    n+= std::min(n_bytes, n - get_value(rec_offs_base(offsets)[n_fields - 1]));
+  return my_crc32c(uint32_t(ut_fold_ull(id)), rec, n);
 }
 
 /** Determine the number of accessed key fields.
@@ -533,10 +493,10 @@ constexpr ulint MAX_N_POINTERS = UNIV_PAGE_SIZE_MAX / REC_N_NEW_EXTRA_BYTES;
 #endif /* UNIV_AHI_DEBUG || UNIV_DEBUG */
 
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
-void btr_sea::partition::insert(ulint fold, const rec_t *rec,
+void btr_sea::partition::insert(uint32 fold, const rec_t *rec,
                                 buf_block_t *block) noexcept
 #else
-void btr_sea::partition::insert(ulint fold, const rec_t *rec) noexcept
+void btr_sea::partition::insert(uint32_t fold, const rec_t *rec) noexcept
 #endif /* UNIV_AHI_DEBUG || UNIV_DEBUG */
 {
 #ifndef SUX_LOCK_GENERIC
@@ -687,7 +647,7 @@ __attribute__((nonnull))
 @param table     hash table
 @param fold      fold value
 @param page      page of a record to be deleted */
-static void ha_remove_all_nodes_to_page(hash_table_t *table, ulint fold,
+static void ha_remove_all_nodes_to_page(hash_table_t *table, uint32_t fold,
                                         const page_t *page)
 {
   hash_cell_t *cell= table->cell_get(fold);
@@ -716,7 +676,7 @@ rewind:
 #endif /* UNIV_DEBUG */
 }
 
-inline bool btr_sea::partition::erase(ulint fold, const rec_t *rec) noexcept
+inline bool btr_sea::partition::erase(uint32_t fold, const rec_t *rec) noexcept
 {
 #ifndef SUX_LOCK_GENERIC
   ut_ad(latch.is_write_locked());
@@ -752,7 +712,7 @@ updates the pointer to data if found.
 @param data      pointer to the data
 @param new_data  new pointer to the data
 @return whether the element was found */
-static bool ha_search_and_update_if_found(hash_table_t *table, ulint fold,
+static bool ha_search_and_update_if_found(hash_table_t *table, uint32_t fold,
                                           const rec_t *data,
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
                                           /** block containing new_data */
@@ -843,13 +803,14 @@ static void btr_search_update_hash_ref(const btr_cur_t* cursor) noexcept
 			goto func_exit;
 		}
 
-		ulint fold = rec_fold(
+		uint32_t fold = rec_fold(
+			index->id,
 			rec,
+			block->curr_n_fields,
+			block->curr_n_bytes,
 			rec_get_offsets(rec, index, offsets_,
 					index->n_core_fields,
-					ULINT_UNDEFINED, &heap),
-			block->curr_n_fields,
-			block->curr_n_bytes, index->id);
+					ULINT_UNDEFINED, &heap));
 		if (UNIV_LIKELY_NULL(heap)) {
 			mem_heap_free(heap);
 		}
@@ -1122,6 +1083,58 @@ inline buf_block_t* buf_pool_t::block_from_ahi(const byte *ptr) const
   return block;
 }
 
+/** Fold a prefix given as the number of fields of a tuple.
+@param tuple   index record
+@param cursor  B-tree cursor
+@return the folded value */
+inline uint32_t dtuple_fold(const dtuple_t* tuple, const btr_cur_t *cursor)
+{
+  ut_ad(tuple);
+  ut_ad(tuple->magic_n == DATA_TUPLE_MAGIC_N);
+  ut_ad(dtuple_check_typed(tuple));
+
+  const auto comp= cursor->index()->table->not_redundant();
+  uint32_t fold= uint32_t(ut_fold_ull(cursor->index()->id));
+
+  for (unsigned i= 0; i < cursor->n_fields; i++)
+  {
+    const dfield_t *field= dtuple_get_nth_field(tuple, i);
+    const void *data= dfield_get_data(field);
+    size_t len= dfield_get_len(field);
+    if (len == UNIV_SQL_NULL)
+    {
+      if (UNIV_UNLIKELY(!comp))
+      {
+        len= dtype_get_sql_null_size(dfield_get_type(field), 0);
+        data= field_ref_zero;
+      }
+      else
+        continue;
+    }
+    fold= my_crc32c(fold, data, len);
+  }
+
+  if (size_t n_bytes= cursor->n_bytes)
+  {
+    const dfield_t *field= dtuple_get_nth_field(tuple, cursor->n_fields);
+    const void *data= dfield_get_data(field);
+    size_t len= dfield_get_len(field);
+    if (len == UNIV_SQL_NULL)
+    {
+      if (UNIV_UNLIKELY(!comp))
+      {
+        len= dtype_get_sql_null_size(dfield_get_type(field), 0);
+        data= field_ref_zero;
+      }
+      else
+        return fold;
+    }
+    fold= my_crc32c(fold, data, std::min(n_bytes, len));
+  }
+
+  return fold;
+}
+
 /** Tries to guess the right search position based on the hash search info
 of the index. Note that if mode is PAGE_CUR_LE, which is used in inserts,
 and the function returns TRUE, then cursor->up_match and cursor->low_match
@@ -1143,9 +1156,6 @@ btr_search_guess_on_hash(
 	btr_cur_t*	cursor,
 	mtr_t*		mtr)
 {
-	ulint		fold;
-	index_id_t	index_id;
-
 	ut_ad(mtr->is_active());
 	ut_ad(index->is_btree() || index->is_ibuf());
 
@@ -1173,12 +1183,12 @@ btr_search_guess_on_hash(
 		return false;
 	}
 
-	index_id = index->id;
+	const index_id_t index_id = index->id;
 
 #ifdef UNIV_SEARCH_PERF_STAT
 	index->search_info.n_hash_succ++;
 #endif
-	fold = dtuple_fold(tuple, cursor->n_fields, cursor->n_bytes, index_id);
+	const uint32_t fold = dtuple_fold(tuple, cursor);
 
 	cursor->fold = fold;
 	cursor->flag = BTR_CUR_HASH;
@@ -1398,7 +1408,7 @@ retry:
 	rec = page_get_infimum_rec(page);
 	rec = page_rec_get_next_low(rec, page_is_comp(page));
 
-	ulint* folds;
+	uint32_t* folds;
 	ulint n_cached = 0;
 	ulint prev_fold = 0;
 
@@ -1413,7 +1423,8 @@ retry:
 		}
 	}
 
-	folds = (ulint*) ut_malloc_nokey(n_recs * sizeof(ulint));
+	folds = static_cast<uint32_t*>(
+		ut_malloc_nokey(n_recs * sizeof *folds));
 	heap = nullptr;
 	offsets = nullptr;
 
@@ -1427,8 +1438,8 @@ retry:
 			rec, index, offsets, index->n_core_fields,
 			btr_search_get_n_fields(n_fields, n_bytes),
 			&heap);
-		const ulint fold = rec_fold(rec, offsets, n_fields, n_bytes,
-					    index_id);
+		const uint32_t fold = rec_fold(index_id, rec,
+					       n_fields, n_bytes, offsets);
 
 		if (fold == prev_fold && prev_fold != 0) {
 
@@ -1552,11 +1563,9 @@ btr_search_build_page_hash_index(
 	bool		left_side)
 {
 	const rec_t*	rec;
-	ulint		fold;
-	ulint		next_fold;
 	ulint		n_cached;
 	ulint		n_recs;
-	ulint*		folds;
+	uint32_t*	folds;
 	const rec_t**	recs;
 	mem_heap_t*	heap		= NULL;
 	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
@@ -1626,7 +1635,7 @@ btr_search_build_page_hash_index(
 	/* Calculate and cache fold values and corresponding records into
 	an array for fast insertion to the hash index */
 
-	folds = static_cast<ulint*>(ut_malloc_nokey(n_recs * sizeof *folds));
+	folds = static_cast<uint32_t*>(ut_malloc_nokey(n_recs * sizeof *folds));
 	recs = static_cast<const rec_t**>(
 		ut_malloc_nokey(n_recs * sizeof *recs));
 
@@ -1641,10 +1650,9 @@ btr_search_build_page_hash_index(
 	ut_ad(page_rec_is_supremum(rec)
 	      || n_fields == rec_offs_n_fields(offsets) - (n_bytes > 0));
 
-	fold = rec_fold(rec, offsets, n_fields, n_bytes, index->id);
+	uint32_t fold = rec_fold(index->id, rec, n_fields, n_bytes, offsets);
 
 	if (left_side) {
-
 		folds[n_cached] = fold;
 		recs[n_cached] = rec;
 		n_cached++;
@@ -1666,8 +1674,8 @@ btr_search_build_page_hash_index(
 		offsets = rec_get_offsets(
 			next_rec, index, offsets, index->n_core_fields,
 			btr_search_get_n_fields(n_fields, n_bytes), &heap);
-		next_fold = rec_fold(next_rec, offsets, n_fields,
-				     n_bytes, index->id);
+		uint32_t next_fold = rec_fold(index->id, next_rec, n_fields,
+					      n_bytes, offsets);
 
 		if (fold != next_fold) {
 			/* Insert an entry into the hash index */
@@ -1847,7 +1855,6 @@ void btr_search_update_hash_on_delete(btr_cur_t *cursor)
 {
 	buf_block_t*	block;
 	const rec_t*	rec;
-	ulint		fold;
 	dict_index_t*	index;
 	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
 	mem_heap_t*	heap		= NULL;
@@ -1885,10 +1892,11 @@ void btr_search_update_hash_on_delete(btr_cur_t *cursor)
 
 	rec = btr_cur_get_rec(cursor);
 
-	fold = rec_fold(rec, rec_get_offsets(rec, index, offsets_,
-					     index->n_core_fields,
-					     ULINT_UNDEFINED, &heap),
-			block->curr_n_fields, block->curr_n_bytes, index->id);
+	uint32_t fold = rec_fold(
+		index->id, rec,
+		block->curr_n_fields, block->curr_n_bytes,
+		rec_get_offsets(rec, index, offsets_, index->n_core_fields,
+				ULINT_UNDEFINED, &heap));
 	if (UNIV_LIKELY_NULL(heap)) {
 		mem_heap_free(heap);
 	}
@@ -1992,9 +2000,6 @@ void btr_search_update_hash_on_insert(btr_cur_t *cursor)
 	const rec_t*	rec;
 	const rec_t*	ins_rec;
 	const rec_t*	next_rec;
-	ulint		fold;
-	ulint		ins_fold;
-	ulint		next_fold = 0; /* remove warning (??? bug ???) */
 	ulint		n_fields;
 	ulint		n_bytes;
 	mem_heap_t*	heap		= NULL;
@@ -2048,14 +2053,16 @@ drop:
 	offsets = rec_get_offsets(ins_rec, index, offsets,
 				  index->n_core_fields,
 				  ULINT_UNDEFINED, &heap);
-	ins_fold = rec_fold(ins_rec, offsets, n_fields, n_bytes, index->id);
+	uint32_t ins_fold = rec_fold(index->id, ins_rec, n_fields, n_bytes,
+				     offsets);
+	uint32_t next_fold = 0, fold;
 
 	if (!page_rec_is_supremum(next_rec)) {
 		offsets = rec_get_offsets(
 			next_rec, index, offsets, index->n_core_fields,
 			btr_search_get_n_fields(n_fields, n_bytes), &heap);
-		next_fold = rec_fold(next_rec, offsets, n_fields,
-				     n_bytes, index->id);
+		next_fold = rec_fold(index->id, next_rec, n_fields, n_bytes,
+				     offsets);
 	}
 
 	btr_sea::partition* const part= &btr_search.parts;
@@ -2066,7 +2073,7 @@ drop:
 		offsets = rec_get_offsets(
 			rec, index, offsets, index->n_core_fields,
 			btr_search_get_n_fields(n_fields, n_bytes), &heap);
-		fold = rec_fold(rec, offsets, n_fields, n_bytes, index->id);
+		fold = rec_fold(index->id, rec, n_fields, n_bytes, offsets);
 	} else {
 		if (left_side) {
 			locked = true;
@@ -2290,11 +2297,11 @@ state_ok:
 							block->curr_n_bytes),
 				&heap);
 
-			const ulint	fold = rec_fold(
-				node->rec, offsets,
+			const uint32_t fold = rec_fold(
+				page_index_id, node->rec,
 				block->curr_n_fields,
 				block->curr_n_bytes,
-				page_index_id);
+				offsets);
 
 			if (node->fold != fold) {
 				ok = FALSE;

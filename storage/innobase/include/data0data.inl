@@ -527,63 +527,6 @@ dtuple_set_types_binary(
 	}
 }
 
-/** Fold a prefix given as the number of fields of a tuple.
-@param[in]	tuple		index record
-@param[in]	n_fields	number of complete fields to fold
-@param[in]	n_bytes		number of bytes to fold in the last field
-@param[in]	index_id	index tree ID
-@return the folded value */
-UNIV_INLINE
-ulint
-dtuple_fold(
-	const dtuple_t*	tuple,
-	ulint		n_fields,
-	ulint		n_bytes,
-	index_id_t	tree_id)
-{
-	const dfield_t*	field;
-	ulint		i;
-	const byte*	data;
-	ulint		len;
-	ulint		fold;
-
-	ut_ad(tuple);
-	ut_ad(tuple->magic_n == DATA_TUPLE_MAGIC_N);
-	ut_ad(dtuple_check_typed(tuple));
-
-	fold = ut_fold_ull(tree_id);
-
-	for (i = 0; i < n_fields; i++) {
-		field = dtuple_get_nth_field(tuple, i);
-
-		data = (const byte*) dfield_get_data(field);
-		len = dfield_get_len(field);
-
-		if (len != UNIV_SQL_NULL) {
-			fold = ut_fold_ulint_pair(fold,
-						  ut_fold_binary(data, len));
-		}
-	}
-
-	if (n_bytes > 0) {
-		field = dtuple_get_nth_field(tuple, i);
-
-		data = (const byte*) dfield_get_data(field);
-		len = dfield_get_len(field);
-
-		if (len != UNIV_SQL_NULL) {
-			if (len > n_bytes) {
-				len = n_bytes;
-			}
-
-			fold = ut_fold_ulint_pair(fold,
-						  ut_fold_binary(data, len));
-		}
-	}
-
-	return(fold);
-}
-
 /**********************************************************************//**
 Writes an SQL null field full of zeros. */
 UNIV_INLINE

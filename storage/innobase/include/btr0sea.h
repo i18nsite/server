@@ -28,14 +28,14 @@ Created 2/17/1996 Heikki Tuuri
 
 #include "dict0dict.h"
 #ifdef BTR_CUR_HASH_ADAPT
-#include "buf0buf.h"
+# include "buf0buf.h"
 
-#ifdef UNIV_PFS_RWLOCK
+# ifdef UNIV_PFS_RWLOCK
 extern mysql_pfs_key_t btr_search_latch_key;
-#endif /* UNIV_PFS_RWLOCK */
+# endif /* UNIV_PFS_RWLOCK */
 
-#define btr_search_sys_create() btr_search.create()
-#define btr_search_sys_free() btr_search.free()
+# define btr_search_sys_create() btr_search.create()
+# define btr_search_sys_free() btr_search.free()
 
 /** Tries to guess the right search position based on the hash search info
 of the index. Note that if mode is PAGE_CUR_LE, which is used in inserts,
@@ -132,7 +132,7 @@ struct btr_sea
   {
     /** latch protecting the hash table */
     alignas(CPU_LEVEL1_DCACHE_LINESIZE) srw_spin_lock latch;
-    /** map of dtuple_fold() or rec_fold() to rec_t* in buf_page_t::frame */
+    /** map of CRC-32C of rec prefix to rec_t* in buf_page_t::frame */
     hash_table_t table;
     /** latch protecting blocks, spare */
     srw_mutex blocks_mutex;
@@ -161,22 +161,22 @@ struct btr_sea
     __attribute__((nonnull))
 # if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
     /** Insert or replace an entry into the hash table.
-    @param fold  hash value of rec
+    @param fold  CRC-32C of rec prefix
     @param rec   B-tree leaf page record
     @param block the buffer block that contains rec */
-    void insert(ulint fold, const rec_t *rec, buf_block_t *block) noexcept;
+    void insert(uint32_t fold, const rec_t *rec, buf_block_t *block) noexcept;
 # else
     /** Insert or replace an entry into the hash table.
-    @param fold  hash value of data
+    @param fold  CRC-32C of rec prefix
     @param rec   B-tree leaf page record */
-    void insert(ulint fold, const rec_t *rec) noexcept;
+    void insert(uint32_t fold, const rec_t *rec) noexcept;
 # endif
 
     /** Delete a pointer to a record if it exists.
-    @param fold   hash value of rec
-    @param rec    B-tree leaf page record
+    @param fold  CRC-32C of rec prefix
+    @param rec   B-tree leaf page record
     @return whether a record existed and was removed */
-    inline bool erase(ulint fold, const rec_t *rec) noexcept;
+    inline bool erase(uint32_t fold, const rec_t *rec) noexcept;
   };
 
   /** Partitions of the adaptive hash index */
@@ -221,12 +221,12 @@ static inline void btr_search_s_unlock_all() noexcept
   btr_search.parts.latch.rd_unlock();
 }
 
-#ifdef UNIV_SEARCH_PERF_STAT
+# ifdef UNIV_SEARCH_PERF_STAT
 /** Number of successful adaptive hash index lookups */
 extern ulint	btr_search_n_succ;
 /** Number of failed adaptive hash index lookups */
 extern ulint	btr_search_n_hash_fail;
-#endif /* UNIV_SEARCH_PERF_STAT */
+# endif /* UNIV_SEARCH_PERF_STAT */
 #else /* BTR_CUR_HASH_ADAPT */
 # define btr_search_sys_create()
 # define btr_search_sys_free()
