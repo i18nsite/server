@@ -160,7 +160,7 @@ static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
   ut_ad(index.n_uniq <= index.n_core_fields);
   size_t n_f= n_fields + !!n_bytes;
   ut_ad(n_f > 0);
-  ut_ad(n_f <= index.n_uniq);
+  ut_ad(n_f <= index.n_core_fields);
 
   size_t n;
 
@@ -199,7 +199,8 @@ static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
         {
           len<<= 8;
           len|= *lens--;
-          ut_ad(len <= 0x3fff);
+          ut_ad(!(len & 0x4000));
+          len&= 0x3fff;
         }
       }
 
