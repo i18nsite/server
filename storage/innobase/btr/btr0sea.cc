@@ -146,11 +146,13 @@ before hash index building is started */
 #define BTR_SEARCH_BUILD_LIMIT		100U
 
 /** Compute a hash value of a record in a page.
+@tparam comp    whether ROW_FORMAT=REDUNDANT is not being used
 @param rec      index record
 @param index    index tree
 @param n_fields number of complete fields to fold
 @param n_bytes  number of bytes to fold in the last field
-@return the hash value */
+@return CRC-32C of the record prefix */
+template<bool comp>
 static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
                          size_t n_fields, size_t n_bytes) noexcept
 {
@@ -161,10 +163,11 @@ static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
   size_t n_f= n_fields + !!n_bytes;
   ut_ad(n_f > 0);
   ut_ad(n_f <= index.n_core_fields);
+  ut_ad(comp == index.table->not_redundant());
 
   size_t n;
 
-  if (index.table->not_redundant())
+  if (comp)
   {
     const unsigned n_core_null_bytes= index.n_core_null_bytes;
     const byte *nulls= rec - REC_N_NEW_EXTRA_BYTES;
@@ -251,6 +254,15 @@ static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
 
   return my_crc32c(uint32_t(ut_fold_ull(index.id)), rec, n);
 }
+
+static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
+                         size_t n_fields, size_t n_bytes, ulint comp) noexcept
+{
+  return comp
+    ? rec_fold<true>(rec, index, n_fields, n_bytes)
+    : rec_fold<false>(rec, index, n_fields, n_bytes);
+}
+
 
 /** Determine the number of accessed key fields.
 @param[in]	n_fields	number of complete fields
@@ -839,50 +851,69 @@ hash nodes. Also, collisions in the fold value can lead to misleading
 references. This function lazily fixes these imperfections in the hash
 index.
 @param[in]	cursor	cursor */
-static void btr_search_update_hash_ref(const btr_cur_t* cursor) noexcept
+static void btr_search_update_hash_ref(const btr_cur_t *cursor) noexcept
 {
-	ut_ad(cursor->flag == BTR_CUR_HASH_FAIL);
+  ut_ad(cursor->flag == BTR_CUR_HASH_FAIL);
+  buf_block_t *const block= cursor->page_cur.block;
+  ut_ad(block->page.lock.have_x() || block->page.lock.have_s());
+  ut_ad(page_align(btr_cur_get_rec(cursor)) == block->page.frame);
+  ut_ad(page_is_leaf(block->page.frame));
+  assert_block_ahi_valid(block);
 
-	buf_block_t* const block = cursor->page_cur.block;
-	ut_ad(block->page.lock.have_x() || block->page.lock.have_s());
-	ut_ad(btr_cur_get_page(cursor) == block->page.frame);
-	ut_ad(page_is_leaf(block->page.frame));
-	assert_block_ahi_valid(block);
+  dict_index_t *index= block->index;
 
-	dict_index_t* index = block->index;
+  if (!index || !index->search_info.n_hash_potential)
+    return;
 
-	if (!index || !index->search_info.n_hash_potential) {
-		return;
-	}
+  if (index != cursor->index())
+  {
+    ut_ad(index->id == cursor->index()->id);
+    btr_search_drop_page_hash_index(block, false);
+    return;
+  }
 
-	if (index != cursor->index()) {
-		ut_ad(index->id == cursor->index()->id);
-		btr_search_drop_page_hash_index(block, false);
-		return;
-	}
+  ut_ad(block->page.id().space() == index->table->space_id);
+  ut_ad(!index->is_ibuf());
+  auto part= &btr_search.parts;
+  part->latch.wr_lock(SRW_LOCK_CALL);
+  ut_ad(!block->index || block->index == index);
 
-	ut_ad(block->page.id().space() == index->table->space_id);
-	ut_ad(index == cursor->index());
-	ut_ad(!dict_index_is_ibuf(index));
-	auto part = &btr_search.parts;
-	part->latch.wr_lock(SRW_LOCK_CALL);
-	ut_ad(!block->index || block->index == index);
+  if (block->index &&
+      block->curr_n_fields == index->search_info.n_fields &&
+      block->curr_n_bytes == index->search_info.n_bytes &&
+      block->curr_left_side == index->search_info.left_side &&
+      btr_search.enabled)
+  {
+    const rec_t *rec= btr_cur_get_rec(cursor);
+    uint32_t fold;
+    if (page_is_comp(block->page.frame))
+    {
+      switch (rec - block->page.frame) {
+      case PAGE_NEW_INFIMUM:
+      case PAGE_NEW_SUPREMUM:
+        goto skip;
+      default:
+        fold= rec_fold<true>(rec, *index, block->curr_n_fields,
+                             block->curr_n_bytes);
+      }
+    }
+    else
+    {
+      switch (rec - block->page.frame) {
+      case PAGE_OLD_INFIMUM:
+      case PAGE_OLD_SUPREMUM:
+        goto skip;
+      default:
+        fold= rec_fold<false>(rec, *index, block->curr_n_fields,
+                              block->curr_n_bytes);
+      }
+    }
 
-	if (block->index
-	    && (block->curr_n_fields == index->search_info.n_fields)
-	    && (block->curr_n_bytes == index->search_info.n_bytes)
-	    && (block->curr_left_side == index->search_info.left_side)
-            && !page_cur_is_before_first(&cursor->page_cur)
-            && !page_cur_is_after_last(&cursor->page_cur)
-	    && btr_search.enabled) {
-		const rec_t* rec = btr_cur_get_rec(cursor);
-		uint32_t fold = rec_fold(rec, *index, block->curr_n_fields,
-					 block->curr_n_bytes);
-		ha_insert_for_fold(part, fold, block, rec);
-		MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
-	}
-
-	part->latch.wr_unlock();
+    ha_insert_for_fold(part, fold, block, rec);
+    MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+  }
+skip:
+  part->latch.wr_unlock();
 }
 
 /** Checks if a guessed position for a tree cursor is right. Note that if
@@ -1145,16 +1176,16 @@ inline buf_block_t* buf_pool_t::block_from_ahi(const byte *ptr) const
 }
 
 /** Fold a prefix given as the number of fields of a tuple.
-@param tuple   index record
-@param cursor  B-tree cursor
-@return the folded value */
-inline uint32_t dtuple_fold(const dtuple_t* tuple, const btr_cur_t *cursor)
+@param tuple    index record
+@param cursor   B-tree cursor
+@return CRC-32C of the record prefix */
+static uint32_t dtuple_fold(const dtuple_t *tuple, const btr_cur_t *cursor)
 {
   ut_ad(tuple);
   ut_ad(tuple->magic_n == DATA_TUPLE_MAGIC_N);
   ut_ad(dtuple_check_typed(tuple));
 
-  const auto comp= cursor->index()->table->not_redundant();
+  const bool comp= cursor->index()->table->not_redundant();
   uint32_t fold= uint32_t(ut_fold_ull(cursor->index()->id));
 
   for (unsigned i= 0; i < cursor->n_fields; i++)
@@ -1377,203 +1408,148 @@ block_and_ahi_release_and_fail:
 			i.e.: it is in state BUF_BLOCK_REMOVE_HASH
 @param[in]	garbage_collect	drop ahi only if the index is marked
 				as freed */
-void btr_search_drop_page_hash_index(buf_block_t* block,
+void btr_search_drop_page_hash_index(buf_block_t *block,
 				     bool garbage_collect) noexcept
 {
-	ulint			n_fields;
-	ulint			n_bytes;
-
 retry:
-	if (!block->index) {
-		return;
-	}
+  if (!block->index)
+    return;
 
-	ut_d(const auto state = block->page.state());
-	ut_ad(state == buf_page_t::REMOVE_HASH
-	      || state >= buf_page_t::UNFIXED);
-	ut_ad(state == buf_page_t::REMOVE_HASH
-	      || !(~buf_page_t::LRU_MASK & state)
-	      || block->page.lock.have_any());
-	ut_ad(state < buf_page_t::READ_FIX || state >= buf_page_t::WRITE_FIX);
-	ut_ad(page_is_leaf(block->page.frame));
+  ut_d(const auto state= block->page.state());
+  ut_ad(state == buf_page_t::REMOVE_HASH || state >= buf_page_t::UNFIXED);
+  ut_ad(state == buf_page_t::REMOVE_HASH ||
+        !(~buf_page_t::LRU_MASK & state) || block->page.lock.have_any());
+  ut_ad(state < buf_page_t::READ_FIX || state >= buf_page_t::WRITE_FIX);
+  ut_ad(page_is_leaf(block->page.frame));
 
-	/* We must not dereference block->index here, because it could be freed
-	if (!index->table->get_ref_count() && !dict_sys.frozen()).
-	Determine the ahi_slot based on the block contents. */
+  const index_id_t index_id= btr_page_get_index_id(block->page.frame);
+  auto part= &btr_search.parts;
 
-	const index_id_t	index_id
-		= btr_page_get_index_id(block->page.frame);
+  part->latch.rd_lock(SRW_LOCK_CALL);
 
-	auto part = &btr_search.parts;
+  dict_index_t *index= block->index;
 
-	part->latch.rd_lock(SRW_LOCK_CALL);
+  if (!index || !btr_search.enabled)
+  {
+  unlock_and_return:
+    part->latch.rd_unlock();
+    return;
+  }
 
-	dict_index_t* index = block->index;
-	bool is_freed = index && index->freed();
+  const bool is_freed= index && index->freed();
 
-	if (is_freed) {
-		part->latch.rd_unlock();
-		part->latch.wr_lock(SRW_LOCK_CALL);
-		if (index != block->index) {
-			part->latch.wr_unlock();
-			goto retry;
-		}
-	} else if (garbage_collect) {
-		part->latch.rd_unlock();
-		return;
-	}
+  if (is_freed)
+  {
+    part->latch.rd_unlock();
+    part->latch.wr_lock(SRW_LOCK_CALL);
+    if (index != block->index)
+    {
+      part->latch.wr_unlock();
+      goto retry;
+    }
+  }
+  else if (garbage_collect)
+    goto unlock_and_return;
 
-	assert_block_ahi_valid(block);
+  assert_block_ahi_valid(block);
 
-	if (!index || !btr_search.enabled) {
-		if (is_freed) {
-			part->latch.wr_unlock();
-		} else {
-			part->latch.rd_unlock();
-		}
-		return;
-	}
+  ut_ad(!index->table->is_temporary());
 
-	ut_ad(!index->table->is_temporary());
-	ut_ad(btr_search.enabled);
+  ut_ad(block->page.id().space() == index->table->space_id);
+  ut_a(index_id == index->id);
+  ut_ad(!index->is_ibuf());
 
-	ut_ad(block->page.id().space() == index->table->space_id);
-	ut_a(index_id == index->id);
-	ut_ad(!dict_index_is_ibuf(index));
+  const size_t n_fields= block->curr_n_fields;
+  const size_t n_bytes= block->curr_n_bytes;
 
-	n_fields = block->curr_n_fields;
-	n_bytes = block->curr_n_bytes;
+  /* NOTE: The AHI fields of block must not be accessed after
+  releasing search latch, as the index page might only be s-latched! */
 
-	/* NOTE: The AHI fields of block must not be accessed after
-	releasing search latch, as the index page might only be s-latched! */
+  if (!is_freed)
+    part->latch.rd_unlock();
 
-	if (!is_freed) {
-		part->latch.rd_unlock();
-	}
+  ut_a(n_fields | n_bytes);
 
-	ut_a(n_fields > 0 || n_bytes > 0);
+  const page_t *const page= block->page.frame;
+  uint32_t *folds= static_cast<uint32_t*>
+    (ut_malloc_nokey(page_get_n_recs(page) * sizeof *folds));
+  ulint n_cached= 0;
 
-	const page_t* const page = block->page.frame;
-	ulint n_recs = page_get_n_recs(page);
-	if (!n_recs) {
-		ut_ad("corrupted adaptive hash index" == 0);
-		return;
-	}
+  if (page_is_comp(page))
+  {
+    const rec_t *rec= page + PAGE_NEW_INFIMUM;
+    rec= page_rec_next_get<true>(page, rec);
 
-	/* Calculate and cache fold values into an array for fast deletion
-	from the hash index */
+    if (rec && rec_is_metadata(rec, true))
+    {
+      ut_ad(index->is_instant());
+      rec= page_rec_next_get<true>(page, rec);
+    }
 
-	const rec_t* rec;
-	const auto comp = page_is_comp(page);
-	uint32_t* folds;
-	ulint n_cached = 0;
-	ulint prev_fold = 0;
+    while (rec && rec != page + PAGE_NEW_SUPREMUM)
+    {
+      folds[n_cached]= rec_fold<true>(rec, *index, n_fields, n_bytes);
+      n_cached+= !n_cached || folds[n_cached] != folds[n_cached - 1];
+      rec= page_rec_next_get<true>(page, rec);
+    }
+  }
+  else
+  {
+    const rec_t *rec= page + PAGE_OLD_INFIMUM;
+    rec= page_rec_next_get<false>(page, rec);
 
-	if (UNIV_LIKELY(comp != 0)) {
-		rec = page_rec_next_get<true>(page, page + PAGE_NEW_INFIMUM);
-		if (rec && rec_is_metadata(rec, TRUE)) {
-			rec = page_rec_next_get<true>(page, rec);
-skipped_metadata:
-			if (!--n_recs) {
-				/* The page only contains the hidden
-				metadata record for instant ALTER
-				TABLE that the adaptive hash index
-				never points to. */
-				folds = nullptr;
-				goto all_deleted;
-			}
-		}
-	} else {
-		rec = page_rec_next_get<false>(page, page + PAGE_OLD_INFIMUM);
-		if (rec && rec_is_metadata(rec, FALSE)) {
-			rec = page_rec_next_get<false>(page, rec);
-			goto skipped_metadata;
-		}
-	}
+    if (rec && rec_is_metadata(rec, false))
+    {
+      ut_ad(index->is_instant());
+      rec= page_rec_next_get<false>(page, rec);
+    }
 
-	folds = static_cast<uint32_t*>(
-		ut_malloc_nokey(n_recs * sizeof *folds));
+    while (rec && rec != page + PAGE_OLD_SUPREMUM)
+    {
+      folds[n_cached]= rec_fold<false>(rec, *index, n_fields, n_bytes);
+      n_cached+= !n_cached || folds[n_cached] != folds[n_cached - 1];
+      rec= page_rec_next_get<false>(page, rec);
+    }
+  }
 
-	while (rec) {
-		if (n_cached >= n_recs) {
-			ut_ad(page_rec_is_supremum(rec));
-			break;
-		}
-		ut_ad(page_rec_is_user_rec(rec));
-		const uint32_t fold = rec_fold(rec, *index, n_fields, n_bytes);
+  if (!is_freed)
+  {
+    part->latch.wr_lock(SRW_LOCK_CALL);
+    if (UNIV_UNLIKELY(!block->index))
+      /* Someone else has meanwhile dropped the hash index */
+      goto cleanup;
+    ut_a(block->index == index);
+  }
 
-		if (fold == prev_fold && prev_fold != 0) {
+  if (block->curr_n_fields != n_fields || block->curr_n_bytes != n_bytes)
+  {
+    /* Someone else has meanwhile built a new hash index on the page,
+    with different parameters */
+    part->latch.wr_unlock();
+    ut_free(folds);
+    goto retry;
+  }
 
-			goto next_rec;
-		}
+  for (ulint i= 0; i < n_cached; i++)
+    ha_remove_all_nodes_to_page(&part->table, folds[i], page);
 
-		/* Remove all hash nodes pointing to this page from the
-		hash chain */
-		folds[n_cached++] = fold;
+  switch (index->search_info.ref_count--) {
+  case 0:
+    ut_error;
+  case 1:
+    if (index->freed())
+      btr_search_lazy_free(index);
+  }
 
-next_rec:
-		if (comp) {
-			rec = page_rec_next_get<true>(page, rec);
-			if (!rec || rec == page + PAGE_NEW_SUPREMUM) {
-				break;
-			}
-		} else {
-			rec = page_rec_next_get<false>(page, rec);
-			if (!rec || rec == page + PAGE_OLD_SUPREMUM) {
-				break;
-			}
-		}
-		prev_fold = fold;
-	}
+  block->index= nullptr;
 
-all_deleted:
-	if (!is_freed) {
-		part->latch.wr_lock(SRW_LOCK_CALL);
-
-		if (UNIV_UNLIKELY(!block->index)) {
-			/* Someone else has meanwhile dropped the
-			hash index */
-			goto cleanup;
-		}
-
-		ut_a(block->index == index);
-	}
-
-	if (block->curr_n_fields != n_fields
-	    || block->curr_n_bytes != n_bytes) {
-
-		/* Someone else has meanwhile built a new hash index on the
-		page, with different parameters */
-
-		part->latch.wr_unlock();
-
-		ut_free(folds);
-		goto retry;
-	}
-
-	for (ulint i = 0; i < n_cached; i++) {
-		ha_remove_all_nodes_to_page(&part->table, folds[i], page);
-	}
-
-	switch (index->search_info.ref_count--) {
-	case 0:
-		ut_error;
-	case 1:
-		if (index->freed()) {
-			btr_search_lazy_free(index);
-		}
-	}
-
-	block->index = nullptr;
-
-	MONITOR_INC(MONITOR_ADAPTIVE_HASH_PAGE_REMOVED);
-	MONITOR_INC_VALUE(MONITOR_ADAPTIVE_HASH_ROW_REMOVED, n_cached);
+  MONITOR_INC(MONITOR_ADAPTIVE_HASH_PAGE_REMOVED);
+  MONITOR_INC_VALUE(MONITOR_ADAPTIVE_HASH_ROW_REMOVED, n_cached);
 
 cleanup:
-	assert_block_ahi_valid(block);
-	part->latch.wr_unlock();
-
-	ut_free(folds);
+  assert_block_ahi_valid(block);
+  part->latch.wr_unlock();
+  ut_free(folds);
 }
 
 /** Drop possible adaptive hash index entries when a page is evicted
@@ -1617,178 +1593,126 @@ sensible, and does not build a hash index if not.
 @param[in]	n_fields	hash this many full fields
 @param[in]	n_bytes		hash this many bytes of the next field
 @param[in]	left_side	hash for searches from left side */
-static
-void
-btr_search_build_page_hash_index(
-	dict_index_t*	index,
-	buf_block_t*	block,
-	uint16_t	n_fields,
-	uint16_t	n_bytes,
-	bool		left_side)
+static void btr_search_build_page_hash_index(dict_index_t *index,
+                                             buf_block_t *block,
+                                             uint16_t n_fields,
+                                             uint16_t n_bytes, bool left_side)
+  noexcept
 {
-	const rec_t*	rec;
-	ulint		n_cached;
-	ulint		n_recs;
-	uint32_t*	folds;
-	const rec_t**	recs;
+  ut_ad(!index->table->is_temporary());
 
-	ut_ad(!index->table->is_temporary());
+  if (!btr_search.enabled)
+    return;
 
-	if (!btr_search.enabled) {
-		return;
-	}
+  ut_ad(block->page.id().space() == index->table->space_id);
+  ut_ad(!index->is_ibuf());
+  ut_ad(page_is_leaf(block->page.frame));
 
-	ut_ad(index);
-	ut_ad(block->page.id().space() == index->table->space_id);
-	ut_ad(!dict_index_is_ibuf(index));
-	ut_ad(page_is_leaf(block->page.frame));
+  ut_ad(block->page.lock.have_any());
+  ut_ad(block->page.id().page_no() >= 3);
 
-	ut_ad(block->page.lock.have_x() || block->page.lock.have_s());
-	ut_ad(block->page.id().page_no() >= 3);
+  btr_search.parts.latch.rd_lock(SRW_LOCK_CALL);
 
-	btr_search.parts.latch.rd_lock(SRW_LOCK_CALL);
+  const bool enabled= btr_search.enabled;
+  const bool rebuild= enabled && block->index &&
+    (block->curr_n_fields != n_fields || block->curr_n_bytes != n_bytes ||
+     block->curr_left_side != left_side);
 
-	const bool enabled = btr_search.enabled;
-	const bool rebuild = enabled && block->index
-		&& (block->curr_n_fields != n_fields
-		    || block->curr_n_bytes != n_bytes
-		    || block->curr_left_side != left_side);
+  btr_search.parts.latch.rd_unlock();
 
-	btr_search.parts.latch.rd_unlock();
+  if (!enabled)
+    return;
 
-	if (!enabled) {
-		return;
-	}
+  if (rebuild)
+    btr_search_drop_page_hash_index(block, false);
 
-	if (rebuild) {
-		btr_search_drop_page_hash_index(block, false);
-	}
+  /* Check that the values for hash index build are sensible */
+  if (!(n_fields | n_bytes))
+    return;
 
-	/* Check that the values for hash index build are sensible */
+  if (dict_index_get_n_unique_in_tree(index) <
+      btr_search_get_n_fields(n_fields, n_bytes))
+    return;
 
-	if (n_fields == 0 && n_bytes == 0) {
+  const page_t *const page= block->page.frame;
+  struct f{uint32_t fold;const rec_t *rec;};
+  f *fr= static_cast<f*>(ut_malloc_nokey(page_get_n_recs(page) * sizeof *fr));
+  ulint n_cached= 0;
 
-		return;
-	}
+  if (page_is_comp(page))
+  {
+    const rec_t *rec= page + PAGE_NEW_INFIMUM;
+    rec= page_rec_next_get<true>(page, rec);
 
-	if (dict_index_get_n_unique_in_tree(index)
-	    < btr_search_get_n_fields(n_fields, n_bytes)) {
-		return;
-	}
+    if (rec && rec_is_metadata(rec, true))
+    {
+      ut_ad(index->is_instant());
+      rec= page_rec_next_get<true>(page, rec);
+    }
 
-	page_t*		page	= buf_block_get_frame(block);
-	n_recs = page_get_n_recs(page);
+    while (rec && rec != page + PAGE_NEW_SUPREMUM)
+    {
+      fr[n_cached]= {rec_fold<true>(rec, *index, n_fields, n_bytes),rec};
+      if (!n_cached || fr[n_cached - 1].fold != fr[n_cached].fold)
+        n_cached++;
+      else if (!left_side)
+        fr[n_cached - 1].rec= rec;
+      rec= page_rec_next_get<true>(page, rec);
+    }
+  }
+  else
+  {
+    const rec_t *rec= page + PAGE_OLD_INFIMUM;
+    rec= page_rec_next_get<false>(page, rec);
 
-	if (n_recs == 0) {
+    if (rec && rec_is_metadata(rec, false))
+    {
+      ut_ad(index->is_instant());
+      rec= page_rec_next_get<false>(page, rec);
+    }
 
-		return;
-	}
+    while (rec && rec != page + PAGE_OLD_SUPREMUM)
+    {
+      fr[n_cached]= {rec_fold<false>(rec, *index, n_fields, n_bytes), rec};
+      if (!n_cached || fr[n_cached - 1].fold != fr[n_cached].fold)
+        n_cached++;
+      else if (!left_side)
+        fr[n_cached - 1].rec= rec;
+      rec= page_rec_next_get<false>(page, rec);
+    }
+  }
 
-	rec = page_rec_get_next_const(page_get_infimum_rec(page));
-        if (!rec) return;
+  btr_search.parts.prepare_insert();
+  btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
+  if (!btr_search.enabled)
+     goto exit_func;
 
-	if (rec_is_metadata(rec, *index)) {
-		rec = page_rec_get_next_const(rec);
-		if (!rec || !--n_recs) return;
-	}
-	if (page_rec_is_supremum(rec)) return;
+  if (!block->index)
+  {
+    assert_block_ahi_empty(block);
+    index->search_info.ref_count++;
+  }
+  else if (block->curr_n_fields != n_fields ||
+           block->curr_n_bytes != n_bytes ||
+           block->curr_left_side != left_side)
+    goto exit_func;
 
-	/* Calculate and cache fold values and corresponding records into
-	an array for fast insertion to the hash index */
+  block->index= index;
+  block->n_hash_helps= 0;
+  block->curr_n_fields= n_fields & dict_index_t::MAX_N_FIELDS;
+  block->curr_n_bytes= n_bytes & ((1U << 15) - 1);
+  block->curr_left_side= left_side;
 
-	folds = static_cast<uint32_t*>(ut_malloc_nokey(n_recs * sizeof *folds));
-	recs = static_cast<const rec_t**>(
-		ut_malloc_nokey(n_recs * sizeof *recs));
+  for (ulint i= 0; i < n_cached; i++)
+    ha_insert_for_fold(&btr_search.parts, fr[i].fold, block, fr[i].rec);
 
-	n_cached = 0;
-
-	ut_a(index->id == btr_page_get_index_id(page));
-
-	uint32_t fold = rec_fold(rec, *index, n_fields, n_bytes);
-
-	if (left_side) {
-		folds[n_cached] = fold;
-		recs[n_cached] = rec;
-		n_cached++;
-	}
-
-	while (const rec_t* next_rec = page_rec_get_next_const(rec)) {
-		if (page_rec_is_supremum(next_rec)) {
-
-			if (!left_side) {
-
-				folds[n_cached] = fold;
-				recs[n_cached] = rec;
-				n_cached++;
-			}
-
-			break;
-		}
-
-		uint32_t next_fold = rec_fold(next_rec, *index, n_fields,
-					      n_bytes);
-
-		if (fold != next_fold) {
-			/* Insert an entry into the hash index */
-
-			if (left_side) {
-
-				folds[n_cached] = next_fold;
-				recs[n_cached] = next_rec;
-				n_cached++;
-			} else {
-				folds[n_cached] = fold;
-				recs[n_cached] = rec;
-				n_cached++;
-			}
-		}
-
-		rec = next_rec;
-		fold = next_fold;
-	}
-
-	btr_search.parts.prepare_insert();
-
-	btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
-
-	if (!btr_search.enabled) {
-		goto exit_func;
-	}
-
-	/* This counter is decremented every time we drop page
-	hash index entries and is incremented here. Since we can
-	rebuild hash index for a page that is already hashed, we
-	have to take care not to increment the counter in that
-	case. */
-	if (!block->index) {
-		assert_block_ahi_empty(block);
-		index->search_info.ref_count++;
-	} else if (block->curr_n_fields != n_fields
-		   || block->curr_n_bytes != n_bytes
-		   || block->curr_left_side != left_side) {
-		goto exit_func;
-	}
-
-	block->n_hash_helps = 0;
-
-	block->curr_n_fields = n_fields & dict_index_t::MAX_N_FIELDS;
-	block->curr_n_bytes = n_bytes & ((1U << 15) - 1);
-	block->curr_left_side = left_side;
-	block->index = index;
-
-	for (ulint i = 0; i < n_cached; i++) {
-		ha_insert_for_fold(&btr_search.parts,
-				   folds[i], block, recs[i]);
-	}
-
-	MONITOR_INC(MONITOR_ADAPTIVE_HASH_PAGE_ADDED);
-	MONITOR_INC_VALUE(MONITOR_ADAPTIVE_HASH_ROW_ADDED, n_cached);
+  MONITOR_INC(MONITOR_ADAPTIVE_HASH_PAGE_ADDED);
+  MONITOR_INC_VALUE(MONITOR_ADAPTIVE_HASH_ROW_ADDED, n_cached);
 exit_func:
-	assert_block_ahi_valid(block);
-	btr_search.parts.latch.wr_unlock();
+  assert_block_ahi_valid(block);
+  btr_search.parts.latch.wr_unlock();
 
-	ut_free(folds);
-	ut_free(recs);
+  ut_free(fr);
 }
 
 void btr_cur_t::search_info_update() const noexcept
@@ -1901,61 +1825,51 @@ drop_exit:
 			using btr_cur_search_, the record is not yet deleted.*/
 void btr_search_update_hash_on_delete(btr_cur_t *cursor)
 {
-	buf_block_t*	block;
-	const rec_t*	rec;
-	dict_index_t*	index;
+  ut_ad(page_is_leaf(btr_cur_get_page(cursor)));
+  if (!btr_search.enabled)
+    return;
+  buf_block_t *block= btr_cur_get_block(cursor);
 
-	ut_ad(page_is_leaf(btr_cur_get_page(cursor)));
+  ut_ad(block->page.lock.have_x());
 
-	if (!btr_search.enabled) {
-		return;
-	}
+  assert_block_ahi_valid(block);
+  dict_index_t *index= block->index;
+  if (!index)
+    return;
+  ut_ad(!cursor->index()->table->is_temporary());
 
-	block = btr_cur_get_block(cursor);
+  if (index != cursor->index())
+  {
+    btr_search_drop_page_hash_index(block, false);
+    return;
+  }
 
-	ut_ad(block->page.lock.have_x());
+  ut_ad(block->page.id().space() == index->table->space_id);
+  ut_a(block->curr_n_fields | block->curr_n_bytes);
+  ut_ad(!index->is_ibuf());
 
-	assert_block_ahi_valid(block);
-	index = block->index;
+  const rec_t *rec= btr_cur_get_rec(cursor);
+  uint32_t fold= rec_fold(rec, *index,
+                          block->curr_n_fields, block->curr_n_bytes,
+                          page_is_comp(btr_cur_get_page(cursor)));
+  auto part= &btr_search.parts;
+  part->latch.wr_lock(SRW_LOCK_CALL);
+  assert_block_ahi_valid(block);
 
-	if (!index) {
-
-		return;
-	}
-
-	ut_ad(!cursor->index()->table->is_temporary());
-
-	if (index != cursor->index()) {
-		btr_search_drop_page_hash_index(block, false);
-		return;
-	}
-
-	ut_ad(block->page.id().space() == index->table->space_id);
-	ut_a(index == cursor->index());
-	ut_a(block->curr_n_fields > 0 || block->curr_n_bytes > 0);
-	ut_ad(!dict_index_is_ibuf(index));
-
-	rec = btr_cur_get_rec(cursor);
-
-	uint32_t fold = rec_fold(rec, *index,
-                                 block->curr_n_fields, block->curr_n_bytes);
-
-	auto part = &btr_search.parts;
-
-	part->latch.wr_lock(SRW_LOCK_CALL);
-	assert_block_ahi_valid(block);
-
-	if (block->index && btr_search.enabled) {
-		ut_a(block->index == index);
-
-		if (part->erase(fold, rec)) {
-			MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_REMOVED);
-		} else {
-			MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_REMOVE_NOT_FOUND);
-		}
-	} else {
-		part->latch.wr_unlock();
-	}
+  if (block->index && btr_search.enabled)
+  {
+    ut_a(block->index == index);
+    if (part->erase(fold, rec))
+    {
+      MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_REMOVED);
+    }
+    else
+    {
+      MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_REMOVE_NOT_FOUND);
+    }
+  }
+  else
+    part->latch.wr_unlock();
 }
 
 /** Updates the page hash index when a single record is inserted on a page.
@@ -2034,148 +1948,137 @@ func_exit:
 				to the cursor */
 void btr_search_update_hash_on_insert(btr_cur_t *cursor)
 {
-	buf_block_t*	block;
-	dict_index_t*	index;
-	const rec_t*	rec;
-	const rec_t*	ins_rec;
-	const rec_t*	next_rec;
-	ulint		n_fields;
-	ulint		n_bytes;
+  ut_ad(!cursor->index()->table->is_temporary());
+  ut_ad(page_is_leaf(btr_cur_get_page(cursor)));
 
-	ut_ad(page_is_leaf(btr_cur_get_page(cursor)));
+  if (!btr_search.enabled)
+    return;
 
-	if (!btr_search.enabled) {
-		return;
-	}
+  buf_block_t *block= btr_cur_get_block(cursor);
 
-	block = btr_cur_get_block(cursor);
+  ut_ad(block->page.lock.have_x());
+  assert_block_ahi_valid(block);
 
-	ut_ad(block->page.lock.have_x());
-	assert_block_ahi_valid(block);
+  dict_index_t *index= block->index;
 
-	index = block->index;
+  if (!index)
+    return;
 
-	if (!index) {
+  ut_ad(block->page.id().space() == index->table->space_id);
+  const rec_t *rec= btr_cur_get_rec(cursor);
 
-		return;
-	}
-
-	ut_ad(block->page.id().space() == index->table->space_id);
-
-	rec = btr_cur_get_rec(cursor);
-
-	ut_ad(!cursor->index()->table->is_temporary());
-
-	if (index != cursor->index()) {
-		ut_ad(index->id == cursor->index()->id);
+  if (index != cursor->index())
+  {
+    ut_ad(index->id == cursor->index()->id);
 drop:
-		btr_search_drop_page_hash_index(block, false);
-		return;
-	}
+    btr_search_drop_page_hash_index(block, false);
+    return;
+  }
 
-	ut_a(index == cursor->index());
-	ut_ad(!dict_index_is_ibuf(index));
+  ut_ad(!index->is_ibuf());
 
-	n_fields = block->curr_n_fields;
-	n_bytes = block->curr_n_bytes;
-	const bool left_side = block->curr_left_side;
+  const size_t n_fields= block->curr_n_fields, n_bytes= block->curr_n_bytes;
+  const bool left_side= block->curr_left_side;
+  const page_t *const page= block->page.frame;
+  const rec_t *ins_rec;
+  const rec_t *next_rec;
+  uint32_t ins_fold, next_fold= 0, fold;
+  bool next_is_supremum, rec_valid;
 
-	ins_rec = page_rec_get_next_const(rec);
-	if (UNIV_UNLIKELY(!ins_rec)) goto drop;
-	next_rec = page_rec_get_next_const(ins_rec);
-	if (UNIV_UNLIKELY(!next_rec)) goto drop;
+  if (page_is_comp(page))
+  {
+    ins_rec= page_rec_next_get<true>(page, rec);
+    if (UNIV_UNLIKELY(!ins_rec)) goto drop;
+    next_rec= page_rec_next_get<true>(page, ins_rec);
+    if (UNIV_UNLIKELY(!next_rec)) goto drop;
+    ins_fold= rec_fold<true>(ins_rec, *index, n_fields, n_bytes);
+    next_is_supremum= next_rec == page + PAGE_NEW_SUPREMUM;
+    if (!next_is_supremum)
+      next_fold= rec_fold<true>(next_rec, *index, n_fields, n_bytes);
+    rec_valid= rec != page + PAGE_NEW_INFIMUM && !rec_is_metadata(rec, true);
+    if (rec_valid)
+      fold= rec_fold<true>(rec, *index, n_fields, n_bytes);
+  }
+  else
+  {
+    ins_rec= page_rec_next_get<false>(page, rec);
+    if (UNIV_UNLIKELY(!ins_rec)) goto drop;
+    next_rec= page_rec_next_get<false>(page, ins_rec);
+    if (UNIV_UNLIKELY(!next_rec)) goto drop;
+    ins_fold= rec_fold<false>(ins_rec, *index, n_fields, n_bytes);
+    next_is_supremum= next_rec == page + PAGE_OLD_SUPREMUM;
+    if (!next_is_supremum)
+      next_fold= rec_fold<false>(next_rec, *index, n_fields, n_bytes);
+    rec_valid= rec != page + PAGE_OLD_INFIMUM && !rec_is_metadata(rec, false);
+    if (rec_valid)
+      fold= rec_fold<false>(rec, *index, n_fields, n_bytes);
+  }
 
-	uint32_t ins_fold = rec_fold(ins_rec, *index, n_fields, n_bytes);
-	uint32_t next_fold = 0, fold;
+  btr_sea::partition *const part= &btr_search.parts;
+  bool locked= false;
+  part->prepare_insert();
 
-	if (!page_rec_is_supremum(next_rec)) {
-		next_fold = rec_fold(next_rec, *index, n_fields, n_bytes);
-	}
+  if (!rec_valid)
+  {
+    if (left_side)
+    {
+      btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
+      if (!btr_search.enabled || !block->index)
+        goto unlock_exit;
+      locked= true;
+      ha_insert_for_fold(part, ins_fold, block, ins_rec);
+      MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+    }
+  }
+  else if (fold != ins_fold)
+  {
+    if (!locked)
+    {
+      btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
+      if (!btr_search.enabled || !block->index)
+        goto unlock_exit;
+      locked= true;
+    }
+    if (!left_side)
+      ha_insert_for_fold(part, fold, block, rec);
+    else
+      ha_insert_for_fold(part, ins_fold, block, ins_rec);
+    MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+  }
 
-	btr_sea::partition* const part= &btr_search.parts;
-	bool locked = false;
-	part->prepare_insert();
+  if (next_is_supremum)
+  {
+    if (!left_side)
+    {
+      if (!locked)
+      {
+        btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
+        if (!btr_search.enabled || !block->index)
+          goto unlock_exit;
+        locked= true;
+      }
+      ha_insert_for_fold(part, ins_fold, block, ins_rec);
+      MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+    }
+  }
+  else if (ins_fold != next_fold)
+  {
+    if (!locked)
+    {
+      locked= true;
+      btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
+      if (!btr_search.enabled || !block->index)
+        goto unlock_exit;
+    }
+    if (!left_side)
+      next_fold= ins_fold, next_rec= ins_rec;
+    ha_insert_for_fold(part, next_fold, block, next_rec);
+    MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
+  }
 
-	if (!page_rec_is_infimum(rec) && !rec_is_metadata(rec, *index)) {
-		fold = rec_fold(rec, *index, n_fields, n_bytes);
-	} else {
-		if (left_side) {
-			locked = true;
-			btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
-
-			if (!btr_search.enabled || !block->index) {
-				goto function_exit;
-			}
-
-			ha_insert_for_fold(part, ins_fold, block, ins_rec);
-			MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
-		}
-
-		goto check_next_rec;
-	}
-
-	if (fold != ins_fold) {
-
-		if (!locked) {
-			locked = true;
-			btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
-
-			if (!btr_search.enabled || !block->index) {
-				goto function_exit;
-			}
-		}
-
-		if (!left_side) {
-			ha_insert_for_fold(part, fold, block, rec);
-		} else {
-			ha_insert_for_fold(part, ins_fold, block, ins_rec);
-		}
-		MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
-	}
-
-check_next_rec:
-	if (page_rec_is_supremum(next_rec)) {
-
-		if (!left_side) {
-			if (!locked) {
-				locked = true;
-				btr_search.parts.latch.wr_lock(
-					SRW_LOCK_CALL);
-
-				if (!btr_search.enabled || !block->index) {
-					goto function_exit;
-				}
-			}
-
-			ha_insert_for_fold(part, ins_fold, block, ins_rec);
-			MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
-		}
-
-		goto function_exit;
-	}
-
-	if (ins_fold != next_fold) {
-		if (!locked) {
-			locked = true;
-			btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
-
-			if (!btr_search.enabled || !block->index) {
-				goto function_exit;
-			}
-		}
-
-		if (!left_side) {
-			ha_insert_for_fold(part, ins_fold, block, ins_rec);
-		} else {
-			ha_insert_for_fold(part, next_fold, block, next_rec);
-		}
-		MONITOR_INC(MONITOR_ADAPTIVE_HASH_ROW_ADDED);
-	}
-
-function_exit:
-	if (locked) {
-		btr_search.parts.latch.wr_unlock();
-	}
+  if (locked)
+  unlock_exit:
+    btr_search.parts.latch.wr_unlock();
 }
 
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
@@ -2304,7 +2207,8 @@ state_ok:
 			const uint32_t fold = rec_fold(
 				node->rec, *block->index,
 				block->curr_n_fields,
-				block->curr_n_bytes);
+				block->curr_n_bytes,
+				page_is_comp(page));
 
 			if (node->fold != fold) {
 				ok = FALSE;
