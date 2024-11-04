@@ -33,7 +33,6 @@ Created 10/4/1994 Heikki Tuuri
 #include "rem0cmp.h"
 #include "gis0rtree.h"
 
-#ifdef BTR_CUR_HASH_ADAPT
 /** Get the pad character code point for a type.
 @param type
 @return pad character code point
@@ -617,6 +616,7 @@ static int cmp_dtuple_rec_leaf(const dtuple_t &dtuple, const rec_t *rec,
   return ret;
 }
 
+#ifdef BTR_CUR_HASH_ADAPT
 bool btr_cur_t::check_mismatch(const dtuple_t& tuple, page_cur_mode_t mode,
                                ulint comp) noexcept
 {
@@ -705,6 +705,7 @@ bool btr_cur_t::check_mismatch(const dtuple_t& tuple, page_cur_mode_t mode,
     return true;
   }
 }
+#endif /* BTR_CUR_HASH_ADAPT */
 
 /** Try a search shortcut based on the last insert.
 @param page     index page
@@ -756,7 +757,6 @@ static bool page_cur_try_search_shortcut(const page_t *page, const rec_t *rec,
   *ilow= low;
   return true;
 }
-#endif /* BTR_CUR_HASH_ADAPT */
 
 /****************************************************************//**
 Searches the right position for a page cursor. */
@@ -821,7 +821,6 @@ page_cur_search_with_match(
 				block, (dict_index_t*)index, tuple, mode,
 				cursor, rtr_info);
 		}
-#ifdef BTR_CUR_HASH_ADAPT
 	} else if (!n_core || mode != PAGE_CUR_LE || !page_is_leaf(page)
 		   || page_get_direction(page) != PAGE_RIGHT) {
 	} else if (uint16_t last =
@@ -834,7 +833,6 @@ page_cur_search_with_match(
 			page_cur_position(page + last, block, cursor);
 			return false;
 		}
-#endif /* BTR_CUR_HASH_ADAPT */
 	}
 
 	/* If mode PAGE_CUR_G is specified, we are trying to position the
