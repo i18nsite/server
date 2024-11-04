@@ -12274,3 +12274,5 @@ ER_JSON_NO_VARIABLE_SCHEMA
         eng "Variable schema is not supported."
 ER_CANNOT_INIT_ENGINE_BINLOG_READER
         eng "Cannot initialize binlog reader from storage engine %s"
+ER_ENGINE_BINLOG_REQUIRES_GTID
+        eng "GTID starting position is required on master with --binlog-storage-engine enabled"
