@@ -3626,9 +3626,9 @@ innobase_row_to_mysql(
 
 	/* The InnoDB row may contain an extra FTS_DOC_ID column at the end. */
 	ut_ad(row->n_fields == dict_table_get_n_cols(itab));
-	ut_ad(n_fields == row->n_fields - DATA_N_SYS_COLS
-	      + dict_table_get_n_v_cols(itab)
-	      - !!(DICT_TF2_FLAG_IS_SET(itab, DICT_TF2_FTS_HAS_DOC_ID)));
+	ut_ad(row->n_fields == n_fields + DATA_N_SYS_COLS
+	      - dict_table_get_n_v_cols(itab)
+	      + !!(DICT_TF2_FLAG_IS_SET(itab, DICT_TF2_FTS_HAS_DOC_ID)));
 
 	for (uint i = 0; i < n_fields; i++) {
 		Field*		field	= table->field[i];

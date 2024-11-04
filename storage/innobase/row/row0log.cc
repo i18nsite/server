@@ -744,7 +744,7 @@ row_log_table_low_redundant(
 	ulint		avail_size;
 	mem_heap_t*	heap		= NULL;
 	dtuple_t*	tuple;
-	const ulint	n_fields = rec_get_n_fields_old(rec);
+	const auto	n_fields = rec_get_n_fields_old(rec);
 
 	ut_ad(index->n_fields >= n_fields);
 	ut_ad(index->n_fields == n_fields || index->is_instant());

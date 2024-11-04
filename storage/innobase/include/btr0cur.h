@@ -692,7 +692,7 @@ struct btr_cur_t {
 	ulint		tree_height;	/*!< Tree height if the search is done
 					for a pessimistic insert or update
 					operation */
-	ulint		up_match;	/*!< If the search mode was PAGE_CUR_LE,
+	uint16_t	up_match;	/*!< If the search mode was PAGE_CUR_LE,
 					the number of matched fields to the
 					the first user record to the right of
 					the cursor record after search_leaf();
@@ -705,18 +705,18 @@ struct btr_cur_t {
 					record if that record is on a
 					different leaf page! (See the note in
 					row_ins_duplicate_error_in_clust.) */
-	ulint		up_bytes;	/*!< number of matched bytes to the
+	uint16_t	up_bytes;	/*!< number of matched bytes to the
 					right at the time cursor positioned;
 					only used internally in searches: not
 					defined after the search */
-	ulint		low_match;	/*!< if search mode was PAGE_CUR_LE,
+	uint16_t	low_match;	/*!< if search mode was PAGE_CUR_LE,
 					the number of matched fields to the
 					first user record AT THE CURSOR or
 					to the left of it after search_leaf();
 					NOT defined for PAGE_CUR_GE or any
 					other search modes; see also the NOTE
 					in up_match! */
-	ulint		low_bytes;	/*!< number of matched bytes to the
+	uint16_t	low_bytes;	/*!< number of matched bytes to the
 					left at the time cursor positioned;
 					only used internally in searches: not
 					defined after the search */
@@ -776,6 +776,16 @@ struct btr_cur_t {
 
 #ifdef BTR_CUR_HASH_ADAPT
   void search_info_update() const noexcept;
+
+  /** Check if a guessed position for a tree cursor is correct.
+  @param tuple  search key
+  @param mode   PAGE_CUR_L, PAGE_CUR_LE, PAGE_CUR_G, PAGE_CUR_GE
+  @param comp   nonzero if ROW_FORMAT=REDUNDANT is not being used
+  @retval true  on mismatch or corruption
+  @retval false on a match; if mode=PAGE_CUR_LE, then up_match,low_match
+  will be set correctly. */
+  bool check_mismatch(const dtuple_t& tuple, page_cur_mode_t mode, ulint comp)
+    noexcept;
 #endif
 };
 

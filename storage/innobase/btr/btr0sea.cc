@@ -175,11 +175,11 @@ static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
     byte null_mask= 1;
     n= 0;
 
-    const dict_field_t *field = index.fields;
+    const dict_field_t *field= index.fields;
     size_t len;
     do
     {
-      const dict_col_t* col = field->col;
+      const dict_col_t *col= field->col;
       if (col->is_nullable())
       {
         const int is_null{*nulls & null_mask};
@@ -265,27 +265,20 @@ static uint32_t rec_fold(const rec_t *rec, const dict_index_t &index,
 
 
 /** Determine the number of accessed key fields.
-@param[in]	n_fields	number of complete fields
-@param[in]	n_bytes		number of bytes in an incomplete last field
-@return	number of complete or incomplete fields */
-inline MY_ATTRIBUTE((warn_unused_result))
-ulint
-btr_search_get_n_fields(
-	ulint	n_fields,
-	ulint	n_bytes)
+@param n_fields  number of complete fields
+@param n_bytes   number of bytes in an incomplete last field
+@return number of complete or incomplete fields */
+inline ulint btr_search_get_n_fields(ulint n_fields, ulint n_bytes) noexcept
 {
-	return(n_fields + (n_bytes > 0 ? 1 : 0));
+  return n_fields + !!n_bytes;
 }
 
 /** Determine the number of accessed key fields.
-@param[in]	cursor		b-tree cursor
-@return	number of complete or incomplete fields */
-inline MY_ATTRIBUTE((warn_unused_result))
-ulint
-btr_search_get_n_fields(
-	const btr_cur_t*	cursor)
+@param cursor    b-tree cursor
+@return number of complete or incomplete fields */
+inline ulint btr_search_get_n_fields(const btr_cur_t *cursor) noexcept
 {
-	return(btr_search_get_n_fields(cursor->n_fields, cursor->n_bytes));
+  return btr_search_get_n_fields(cursor->n_fields, cursor->n_bytes);
 }
 
 void btr_sea::partition::prepare_insert() noexcept
@@ -433,6 +426,9 @@ static void btr_search_info_update_hash(const btr_cur_t *cursor)
 
 	uint16_t n_unique = dict_index_get_n_unique_in_tree(index);
 	auto info = &index->search_info;
+	const int info_cmp = int(info->n_fields << 16 | info->n_bytes);
+	const int low_cmp = int(cursor->low_match << 16 | cursor->low_bytes);
+	const int up_cmp = int(cursor->up_match << 16 | cursor->up_bytes);
 
 	if (info->n_hash_potential == 0) {
 
@@ -449,16 +445,14 @@ increment_potential:
 		return;
 	}
 
-	cmp = ut_pair_cmp(info->n_fields, info->n_bytes,
-			  cursor->low_match, cursor->low_bytes);
+	cmp = info_cmp - low_cmp;
 
 	if (info->left_side ? cmp <= 0 : cmp > 0) {
 
 		goto set_new_recomm;
 	}
 
-	cmp = ut_pair_cmp(info->n_fields, info->n_bytes,
-			  cursor->up_match, cursor->up_bytes);
+	cmp = info_cmp - up_cmp;
 
 	if (info->left_side ? cmp <= 0 : cmp > 0) {
 
@@ -472,8 +466,7 @@ set_new_recomm:
 
 	info->hash_analysis_reset();
 
-	cmp = ut_pair_cmp(cursor->up_match, cursor->up_bytes,
-			  cursor->low_match, cursor->low_bytes);
+	cmp = up_cmp - low_cmp;
 	info->left_side = cmp >= 0;
 	info->n_hash_potential = cmp != 0;
 
@@ -850,7 +843,7 @@ what happens at page boundaries, and therefore there can be misleading
 hash nodes. Also, collisions in the fold value can lead to misleading
 references. This function lazily fixes these imperfections in the hash
 index.
-@param[in]	cursor	cursor */
+@param cursor    B-tree cursor */
 static void btr_search_update_hash_ref(const btr_cur_t *cursor) noexcept
 {
   ut_ad(cursor->flag == BTR_CUR_HASH_FAIL);
@@ -914,183 +907,6 @@ static void btr_search_update_hash_ref(const btr_cur_t *cursor) noexcept
   }
 skip:
   part->latch.wr_unlock();
-}
-
-/** Checks if a guessed position for a tree cursor is right. Note that if
-mode is PAGE_CUR_LE, which is used in inserts, and the function returns
-TRUE, then cursor->up_match and cursor->low_match both have sensible values.
-@param[in,out]	cursor		guess cursor position
-@param[in]	can_only_compare_to_cursor_rec
-				if we do not have a latch on the page of cursor,
-				but a latch corresponding search system, then
-				ONLY the columns of the record UNDER the cursor
-				are protected, not the next or previous record
-				in the chain: we cannot look at the next or
-				previous record to check our guess!
-@param[in]	tuple		data tuple
-@param[in]	mode		PAGE_CUR_L, PAGE_CUR_LE, PAGE_CUR_G, PAGE_CUR_GE
-@return	whether a match was found */
-static
-bool
-btr_search_check_guess(
-	btr_cur_t*	cursor,
-	bool		can_only_compare_to_cursor_rec,
-	const dtuple_t*	tuple,
-	ulint		mode)
-{
-	rec_t*		rec;
-	ulint		n_unique;
-	ulint		match;
-	int		cmp;
-	mem_heap_t*	heap		= NULL;
-	rec_offs	offsets_[REC_OFFS_NORMAL_SIZE];
-	rec_offs*	offsets		= offsets_;
-	bool		success		= false;
-	rec_offs_init(offsets_);
-
-	n_unique = dict_index_get_n_unique_in_tree(cursor->index());
-
-	rec = btr_cur_get_rec(cursor);
-
-	if (UNIV_UNLIKELY(!page_rec_is_user_rec(rec)
-			  || !page_rec_is_leaf(rec))) {
-		ut_ad("corrupted index" == 0);
-		return false;
-	} else if (cursor->index()->table->not_redundant()) {
-		switch (rec_get_status(rec)) {
-		case REC_STATUS_INSTANT:
-		case REC_STATUS_ORDINARY:
-			break;
-		default:
-			ut_ad("corrupted index" == 0);
-			return false;
-		}
-	}
-
-	match = 0;
-
-	offsets = rec_get_offsets(rec, cursor->index(), offsets,
-				  cursor->index()->n_core_fields,
-				  n_unique, &heap);
-	cmp = cmp_dtuple_rec_with_match(tuple, rec, offsets, &match);
-
-	if (mode == PAGE_CUR_GE) {
-		if (cmp > 0) {
-			goto exit_func;
-		}
-
-		cursor->up_match = match;
-
-		if (match >= n_unique) {
-			success = true;
-			goto exit_func;
-		}
-	} else if (mode == PAGE_CUR_LE) {
-		if (cmp < 0) {
-			goto exit_func;
-		}
-
-		cursor->low_match = match;
-
-	} else if (mode == PAGE_CUR_G) {
-		if (cmp >= 0) {
-			goto exit_func;
-		}
-	} else if (mode == PAGE_CUR_L) {
-		if (cmp <= 0) {
-			goto exit_func;
-		}
-	}
-
-	if (can_only_compare_to_cursor_rec) {
-		/* Since we could not determine if our guess is right just by
-		looking at the record under the cursor, return FALSE */
-		goto exit_func;
-	}
-
-	match = 0;
-
-	if ((mode == PAGE_CUR_G) || (mode == PAGE_CUR_GE)) {
-		const rec_t* prev_rec = page_rec_get_prev(rec);
-
-		if (UNIV_UNLIKELY(!prev_rec)) {
-			ut_ad("corrupted index" == 0);
-			goto exit_func;
-		}
-
-		if (page_rec_is_infimum(prev_rec)) {
-			success = !page_has_prev(page_align(prev_rec));
-			goto exit_func;
-		}
-
-		if (cursor->index()->table->not_redundant()) {
-			switch (rec_get_status(prev_rec)) {
-			case REC_STATUS_INSTANT:
-			case REC_STATUS_ORDINARY:
-				break;
-			default:
-				ut_ad("corrupted index" == 0);
-				goto exit_func;
-			}
-		}
-
-		offsets = rec_get_offsets(prev_rec, cursor->index(), offsets,
-					  cursor->index()->n_core_fields,
-					  n_unique, &heap);
-		cmp = cmp_dtuple_rec_with_match(
-			tuple, prev_rec, offsets, &match);
-		if (mode == PAGE_CUR_GE) {
-			success = cmp > 0;
-		} else {
-			success = cmp >= 0;
-		}
-	} else {
-		ut_ad(!page_rec_is_supremum(rec));
-
-		const rec_t* next_rec = page_rec_get_next(rec);
-
-		if (UNIV_UNLIKELY(!next_rec)) {
-			ut_ad("corrupted index" == 0);
-			goto exit_func;
-		}
-
-		if (page_rec_is_supremum(next_rec)) {
-			if (!page_has_next(page_align(next_rec))) {
-				cursor->up_match = 0;
-				success = true;
-			}
-
-			goto exit_func;
-		}
-
-		if (cursor->index()->table->not_redundant()) {
-			switch (rec_get_status(next_rec)) {
-			case REC_STATUS_INSTANT:
-			case REC_STATUS_ORDINARY:
-				break;
-			default:
-				ut_ad("corrupted index" == 0);
-				goto exit_func;
-			}
-		}
-
-		offsets = rec_get_offsets(next_rec, cursor->index(), offsets,
-					  cursor->index()->n_core_fields,
-					  n_unique, &heap);
-		cmp = cmp_dtuple_rec_with_match(
-			tuple, next_rec, offsets, &match);
-		if (mode == PAGE_CUR_LE) {
-			success = cmp < 0;
-			cursor->up_match = match;
-		} else {
-			success = cmp <= 0;
-		}
-	}
-exit_func:
-	if (UNIV_LIKELY_NULL(heap)) {
-		mem_heap_free(heap);
-	}
-	return(success);
 }
 
 /** Clear the adaptive hash index on all pages in the buffer pool. */
@@ -1243,8 +1059,8 @@ bool
 btr_search_guess_on_hash(
 	dict_index_t*	index,
 	const dtuple_t*	tuple,
-	ulint		mode,
-	ulint		latch_mode,
+	page_cur_mode_t	mode,
+	btr_latch_mode	latch_mode,
 	btr_cur_t*	cursor,
 	mtr_t*		mtr)
 {
@@ -1372,20 +1188,26 @@ block_and_ahi_release_and_fail:
 	mtr->memo_push(block, mtr_memo_type_t(latch_mode));
 
 	ut_ad(page_rec_is_user_rec(rec));
+	ut_ad(page_is_leaf(block->page.frame));
 
 	btr_cur_position(index, const_cast<rec_t*>(rec), block, cursor);
+	const auto comp = page_is_comp(block->page.frame);
+	if (UNIV_LIKELY(comp != 0)) {
+		switch (rec_get_status(rec)) {
+		case REC_STATUS_INSTANT:
+		case REC_STATUS_ORDINARY:
+			break;
+		default:
+		corrupted:
+			mtr->release_last_page();
+			goto fail;
+		}
+	}
 
 	/* Check the validity of the guess within the page */
-
-	/* If we only have the latch on search system, not on the
-	page, it only protects the columns of the record the cursor
-	is positioned on. We cannot look at the next of the previous
-	record to determine if our guess for the cursor position is
-	right. */
 	if (index_id != btr_page_get_index_id(block->page.frame)
-	    || !btr_search_check_guess(cursor, false, tuple, mode)) {
-		mtr->release_last_page();
-		goto fail;
+	    || cursor->check_mismatch(*tuple, mode, comp)) {
+		goto corrupted;
 	}
 
 	if (index->search_info.n_hash_potential < BTR_SEARCH_BUILD_LIMIT + 5) {

@@ -238,14 +238,14 @@ dtuple_set_info_bits(
 	dtuple_t*	tuple,		/*!< in: tuple */
 	ulint		info_bits)	/*!< in: info bits */
 {
-	tuple->info_bits = info_bits;
+	tuple->info_bits = byte(info_bits);
 }
 
 /*********************************************************************//**
 Gets number of fields used in record comparisons.
 @return number of fields used in comparisons in rem0cmp.* */
 UNIV_INLINE
-ulint
+uint16_t
 dtuple_get_n_fields_cmp(
 /*====================*/
 	const dtuple_t*	tuple)	/*!< in: tuple */
@@ -264,7 +264,7 @@ dtuple_set_n_fields_cmp(
 					comparisons in rem0cmp.* */
 {
 	ut_ad(n_fields_cmp <= tuple->n_fields);
-	tuple->n_fields_cmp = n_fields_cmp;
+	tuple->n_fields_cmp = uint16_t(n_fields_cmp);
 }
 
 /** Creates a data tuple from an already allocated chunk of memory.
@@ -291,9 +291,9 @@ dtuple_create_from_mem(
 
 	tuple = (dtuple_t*) buf;
 	tuple->info_bits = 0;
-	tuple->n_fields = n_fields;
-	tuple->n_v_fields = n_v_fields;
-	tuple->n_fields_cmp = n_fields;
+	tuple->n_fields = uint16_t(n_fields);
+	tuple->n_v_fields = uint16_t(n_v_fields);
+	tuple->n_fields_cmp = uint16_t(n_fields);
 	tuple->fields = (dfield_t*) &tuple[1];
 	if (n_v_fields > 0) {
 		tuple->v_fields = &tuple->fields[n_fields];
@@ -398,6 +398,12 @@ dtuple_create_with_vcol(
 	return(tuple);
 }
 
+inline void dtuple_set_n_fields(dtuple_t *tuple, ulint n_fields)
+{
+  tuple->n_fields= uint16_t(n_fields);
+  tuple->n_fields_cmp= uint16_t(n_fields);
+}
+
 /** Copies a data tuple's virtual fields to another. This is a shallow copy;
 @param[in,out]	d_tuple		destination tuple
 @param[in]	s_tuple		source tuple */
@@ -432,7 +438,7 @@ dtuple_copy(
 	ulint		n_fields	= dtuple_get_n_fields(tuple);
 	ulint		n_v_fields	= dtuple_get_n_v_fields(tuple);
 	dtuple_t*	new_tuple	= dtuple_create_with_vcol(
-						heap, n_fields, n_v_fields);
+		heap, tuple->n_fields, tuple->n_v_fields);
 	ulint		i;
 
 	for (i = 0; i < n_fields; i++) {

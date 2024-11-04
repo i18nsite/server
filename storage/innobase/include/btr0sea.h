@@ -52,8 +52,8 @@ bool
 btr_search_guess_on_hash(
 	dict_index_t*	index,
 	const dtuple_t*	tuple,
-	ulint		mode,
-	ulint		latch_mode,
+	page_cur_mode_t	mode,
+	btr_latch_mode	latch_mode,
 	btr_cur_t*	cursor,
 	mtr_t*		mtr);
 
