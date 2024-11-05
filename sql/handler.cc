@@ -5295,6 +5295,7 @@ bool non_existing_table_error(int error)
           error == ER_WRONG_OBJECT);
 }
 
+int check_foreign_key_relations(THD *thd, TABLE *table);
 
 /**
   Performs checks upon the table.
@@ -5336,6 +5337,8 @@ int handler::ha_check(THD *thd, HA_CHECK_OPT *check_opt)
       return 0;
   }
   if (unlikely((error= check(thd, check_opt))))
+    return error;
+  if (unlikely(error == check_foreign_key_relations(thd, table)))
     return error;
   /* Skip updating frm version if not main handler. */
   if (table->file != this || opt_readonly)
@@ -9210,4 +9213,256 @@ void handler::set_optimizer_costs(THD *thd)
 {
   optimizer_where_cost=      thd->variables.optimizer_where_cost;
   optimizer_scan_setup_cost= thd->variables.optimizer_scan_setup_cost;
+}
+
+void resolve_field_names(const TABLE *table,
+                         const List<Lex_ident_column> &field_names,
+                         Field **fields)
+{
+  int top= 0;
+  for (Lex_ident_column &name: field_names)
+    for (Field **f= table->field; *f; f++)
+      if ((*f)->field_name.streq(name))
+        fields[top++]= *f;
+}
+
+
+const KEY *find_key_by_name(const TABLE *table, const Lex_ident_column &name)
+{
+  for (uint k = 0; k < table->s->keys; k++)
+    if (table->key_info[k].name.streq(name))
+      return &table->key_info[k];
+  return NULL;
+}
+
+uint key_prefix_store_length(const KEY *key, uint parts)
+{
+  uint key_len= 0;
+  for (uint kp= 0; kp < parts; kp++)
+    key_len+= key->key_part[kp].store_length;
+  return key_len;
+}
+
+TABLE *find_fk_open_table(THD *thd, const char *db, size_t db_len,
+                          const char *table, size_t table_len);
+
+static
+int check_record_reference(const TABLE *table, const TABLE *ref_table,
+                            const KEY *this_key, const KEY *ref_key,
+                            uint fk_parts, uchar *key_buf,
+                            uint prefix_length,
+                            const uchar *this_record,
+                            uchar *ref_record)
+{
+  for (uint kp= 0; kp < fk_parts; kp++)
+    if (this_key->key_part[kp].field->is_real_null())
+      return 0;
+
+  key_copy(key_buf, this_record, this_key, prefix_length, false);
+
+  key_part_map kp_map((1 << fk_parts) - 1);
+  int error= ref_table->file->ha_index_read_map(ref_record, key_buf,
+                                                kp_map, HA_READ_KEY_EXACT);
+
+  if (error)
+  {
+    if (error == HA_ERR_KEY_NOT_FOUND || error == HA_ERR_END_OF_FILE)
+      return HA_ERR_KEY_NOT_FOUND;
+    else
+      ref_table->file->print_error(error, MYF(0));
+  }
+  return error;
+}
+
+static
+int check_key_referential_integrity(const TABLE *table, const TABLE *ref_table,
+                                    const KEY *this_key, const KEY *ref_key,
+                                    uint fk_parts, uchar *key_buf)
+{
+  int error= table->file->ha_rnd_init(true);
+  if (error)
+    return error;
+
+  error= ref_table->file->ha_index_init(ref_key - ref_table->key_info, false);
+  if (error)
+    return error;
+
+  uint prefix_length= key_prefix_store_length(this_key, fk_parts);
+
+  bool is_ok= true;
+  while ((error= table->file->ha_rnd_next(table->record[0])) == 0)
+  {
+    if (int res= check_record_reference(table, ref_table, this_key, ref_key,
+                                        fk_parts, key_buf, prefix_length,
+                                        table->record[0],
+                                        ref_table->record[0]))
+    {
+      if (res == ER_KEY_NOT_FOUND)
+        table->file->print_error(res, ME_WARNING);
+      is_ok= false;
+    }
+  }
+
+  table->file->ha_rnd_end();
+  ref_table->file->ha_index_end();
+
+  return is_ok ? 0 : HA_ADMIN_CORRUPT;
+}
+
+static
+void report_check_key_not_found(THD *thd, const Lex_ident_column &key,
+                                const TABLE *table,
+                                const FOREIGN_KEY_INFO &fk)
+{
+
+  push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
+                      HA_ERR_INDEX_CORRUPT,
+                      "Key %s is not found in table %s.%s "
+                      "needed for foreign key %s.",
+                      key.str, table->s->db.str, table->s->table_name.str,
+                      fk.foreign_id->str);
+}
+
+static
+void report_check_key_wrong_description(THD *thd, const KEY *key,
+                                 const TABLE *table,
+                                 const FOREIGN_KEY_INFO &fk)
+{
+  push_warning_printf(thd, Sql_condition::WARN_LEVEL_WARN,
+                      HA_ERR_INDEX_CORRUPT,
+                      "Key %s in table %s.%s doesn't match foreign key %s.",
+                      key->name.str, table->s->db.str, table->s->table_name.str,
+                      fk.foreign_id->str);
+}
+
+static bool check_key_description(THD *thd, const KEY *key,
+                                  const TABLE *table,
+                                  const List<Lex_ident_column> cols)
+{
+  if (key->user_defined_key_parts < cols.elements)
+    return false;
+  int kp = 0;
+  for (const auto &col: cols)
+  {
+    if (!col.streq(key->key_part[kp].field->field_name))
+      return false;
+    kp++;
+  }
+  return true;
+}
+
+int check_foreign_key_relations(THD *thd, TABLE *table)
+{
+  List<FOREIGN_KEY_INFO> fk_list, parent_fk_list;
+  if (int err= table->file->get_parent_foreign_key_list(thd, &parent_fk_list))
+    return err;
+  if (int err= table->file->get_foreign_key_list(thd, &fk_list))
+    return err;
+
+  using std::max;
+  uint max_key_len= 0;
+
+  for (const FOREIGN_KEY_INFO &fk: fk_list)
+  {
+    const KEY *key= find_key_by_name(table, *fk.foreign_key_name);
+    if (!key)
+      continue;
+    max_key_len= max(max_key_len,
+                     key_prefix_store_length(key, fk.foreign_fields.elements));
+  }
+
+  for (const FOREIGN_KEY_INFO &fk: parent_fk_list)
+  {
+    const KEY *key= find_key_by_name(table, *fk.referenced_key_name);
+    if (!key)
+      continue;
+    max_key_len= max(max_key_len,
+                     key_prefix_store_length(key,
+                                             fk.referenced_fields.elements));
+  }
+
+  uchar *key_buf= (uchar*)thd->alloc(max_key_len);
+  if (!key_buf)
+    return HA_ERR_OUT_OF_MEM;
+
+  for (const FOREIGN_KEY_INFO &fk: fk_list)
+  {
+    const TABLE *ref_table= find_fk_open_table(thd, fk.referenced_db->str,
+                                               fk.referenced_db->length,
+                                               fk.referenced_table->str,
+                                               fk.referenced_table->length);
+
+    const KEY *this_key= find_key_by_name(table, *fk.foreign_key_name),
+               *ref_key= find_key_by_name(ref_table, *fk.referenced_key_name);
+
+
+    if (!this_key)
+      report_check_key_not_found(thd, *fk.referenced_key_name, table, fk);
+
+    if (!ref_key)
+      report_check_key_not_found(thd, *fk.foreign_key_name, ref_table, fk);
+
+    if (!this_key || !ref_key)
+      continue;
+
+    if (!check_key_description(thd, this_key, table, fk.foreign_fields))
+    {
+      report_check_key_wrong_description(thd, this_key, table, fk);
+      continue;
+    }
+    if (!check_key_description(thd, ref_key, ref_table, fk.referenced_fields))
+    {
+      report_check_key_wrong_description(thd, ref_key, ref_table, fk);
+      continue;
+    }
+
+    uint kp_num= fk.foreign_fields.elements;
+    int error= check_key_referential_integrity(table, ref_table, this_key,
+                                               ref_key, kp_num, key_buf);
+
+    if (error)
+      return error;
+  }
+
+  for (const FOREIGN_KEY_INFO &fk: parent_fk_list)
+  {
+    const TABLE *parent_table= find_fk_open_table(thd, fk.foreign_db->str,
+                                               fk.foreign_db->length,
+                                               fk.foreign_table->str,
+                                               fk.foreign_table->length);
+
+    const KEY *this_key= find_key_by_name(table, *fk.referenced_key_name),
+              *parent_key= find_key_by_name(parent_table, *fk.foreign_key_name);
+
+
+    if (!this_key)
+      report_check_key_not_found(thd, *fk.referenced_key_name, table, fk);
+
+    if (!parent_key)
+      report_check_key_not_found(thd, *fk.foreign_key_name, parent_table, fk);
+
+    if (!this_key || !parent_key)
+      continue;
+
+    if (!check_key_description(thd, this_key, table, fk.referenced_fields))
+    {
+      report_check_key_wrong_description(thd, this_key, table, fk);
+      continue;
+    }
+    if (!check_key_description(thd, parent_key, parent_table, fk.foreign_fields))
+    {
+      report_check_key_wrong_description(thd, parent_key, parent_table, fk);
+      continue;
+    }
+
+    int error= check_key_referential_integrity(parent_table, table,
+                                               parent_key, this_key,
+                                               fk.foreign_fields.elements,
+                                               key_buf);
+
+    if (error)
+      return error;
+  }
+
+  return 0;
 }
