@@ -9280,11 +9280,11 @@ enum fk_column_change_type
 
 static enum fk_column_change_type
 fk_check_column_changes(THD *thd, Alter_info *alter_info,
-                        List<LEX_CSTRING> &fk_columns,
+                        List<Lex_ident_column> &fk_columns,
                         const char **bad_column_name)
 {
-  List_iterator_fast<LEX_CSTRING> column_it(fk_columns);
-  LEX_CSTRING *column;
+  List_iterator_fast<Lex_ident_column> column_it(fk_columns);
+  Lex_ident_column *column;
 
   *bad_column_name= NULL;
 

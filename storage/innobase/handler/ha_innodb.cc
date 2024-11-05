@@ -15417,7 +15417,7 @@ get_foreign_key_info(
 	char			tmp_buff[NAME_LEN+1];
 	char			name_buff[NAME_LEN+1];
 	const char*		ptr;
-	LEX_CSTRING*		name = NULL;
+	Lex_ident_column*	name = NULL;
 
 	if (dict_table_t::is_temporary_name(foreign->foreign_table_name)) {
  		return NULL;
@@ -15463,11 +15463,11 @@ get_foreign_key_info(
 
 	do {
 		ptr = foreign->foreign_col_names[i];
-		name = thd_make_lex_string(thd, name, ptr,
+		name = (Lex_ident_column*)thd_make_lex_string(thd, name, ptr,
 					   strlen(ptr), 1);
 		f_key_info.foreign_fields.push_back(name);
 		ptr = foreign->referenced_col_names[i];
-		name = thd_make_lex_string(thd, name, ptr,
+		name = (Lex_ident_column*)thd_make_lex_string(thd, name, ptr,
 					   strlen(ptr), 1);
 		f_key_info.referenced_fields.push_back(name);
 	} while (++i < foreign->n_fields);
@@ -15517,15 +15517,25 @@ get_foreign_key_info(
 
 	if (foreign->referenced_index
 	    && foreign->referenced_index->name != NULL) {
-		f_key_info.referenced_key_name = thd_make_lex_string(
-			thd,
-			nullptr,
-			foreign->referenced_index->name,
-			strlen(foreign->referenced_index->name),
-			1);
+		f_key_info.referenced_key_name =
+			(Lex_ident_column*)thd_make_lex_string(
+				thd,
+				nullptr,
+				foreign->referenced_index->name,
+				strlen(foreign->referenced_index->name),
+				1);
 	} else {
 		f_key_info.referenced_key_name = NULL;
 	}
+
+	ut_ad(foreign->foreign_index);
+	ut_ad(foreign->foreign_index->name);
+
+	f_key_info.foreign_key_name = (Lex_ident_column*)thd_make_lex_string(
+		thd, nullptr,
+		foreign->foreign_index->name,
+		strlen(foreign->foreign_index->name), 1);
+
 
 	pf_key_info = (FOREIGN_KEY_INFO*) thd_memdup(thd, &f_key_info,
 						      sizeof(FOREIGN_KEY_INFO));
