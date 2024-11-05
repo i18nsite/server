@@ -591,14 +591,17 @@ btr_intention_t btr_cur_get_and_clear_intention(btr_latch_mode *latch_mode)
 
 /** @return whether the distance between two records is at most the
 specified value */
+template<bool comp>
 static bool
-page_rec_distance_is_at_most(const rec_t *left, const rec_t *right, ulint val)
+page_rec_distance_is_at_most(const page_t *page, const rec_t *left,
+                             const rec_t *right, ulint val)
+  noexcept
 {
   do
   {
     if (left == right)
       return true;
-    left= page_rec_get_next_const(left);
+    left= page_rec_next_get<comp>(page, left);
   }
   while (left && val--);
   return false;
@@ -669,25 +672,52 @@ btr_cur_will_modify_tree(
 			}
 			/* check delete will cause. (BTR_INTENTION_BOTH
 			or BTR_INTENTION_DELETE) */
-			if (n_recs <= max_nodes_deleted * 2
-			    || page_rec_is_first(rec, page)) {
+			if (n_recs <= max_nodes_deleted * 2) {
 				/* The cursor record can be the left most record
 				in this page. */
 				return true;
 			}
 
-			if (page_has_prev(page)
-			    && page_rec_distance_is_at_most(
-				    page_get_infimum_rec(page), rec,
-				    max_nodes_deleted)) {
-				return true;
-			}
-
-			if (page_has_next(page)
-			    && page_rec_distance_is_at_most(
-				    rec, page_get_supremum_rec(page),
-				    max_nodes_deleted)) {
-				return true;
+			if (page_is_comp(page)) {
+				const rec_t *const infimum
+					= page + PAGE_NEW_INFIMUM;
+				if (page_rec_next_get<true>(page, infimum)
+				    == rec) {
+					return true;
+				}
+				if (!page_has_prev(page)
+				    && page_rec_distance_is_at_most<true>(
+					    page, infimum, rec,
+					    max_nodes_deleted)) {
+					return true;
+				}
+				if (page_has_next(page)
+				    && page_rec_distance_is_at_most<true>(
+					    page, rec,
+					    page + PAGE_NEW_SUPREMUM,
+					    max_nodes_deleted)) {
+					return true;
+				}
+			} else {
+				const rec_t *const infimum
+					= page + PAGE_OLD_INFIMUM;
+				if (page_rec_next_get<false>(page, infimum)
+				    == rec) {
+					return true;
+				}
+				if (!page_has_prev(page)
+				    && page_rec_distance_is_at_most<false>(
+					    page, infimum, rec,
+					    max_nodes_deleted)) {
+					return true;
+				}
+				if (page_has_next(page)
+				    && page_rec_distance_is_at_most<false>(
+					    page, rec,
+					    page + PAGE_OLD_SUPREMUM,
+					    max_nodes_deleted)) {
+					return true;
+				}
 			}
 
 			/* Delete at leftmost record in a page causes delete

@@ -2729,7 +2729,7 @@ ibuf_get_volume_buffered(
 	page = btr_pcur_get_page(pcur);
 	ut_ad(page_validate(page, ibuf.index));
 
-	if (page_rec_is_supremum(rec)
+	if (rec == page + PAGE_OLD_SUPREMUM
 	    && UNIV_UNLIKELY(!(rec = page_rec_get_prev_const(rec)))) {
 corruption:
 		ut_ad("corrupted page" == 0);
@@ -2738,7 +2738,7 @@ corruption:
 
 	uint32_t prev_page_no;
 
-	for (; !page_rec_is_infimum(rec); ) {
+	while (rec != page + PAGE_OLD_INFIMUM) {
 		ut_ad(page_align(rec) == page);
 
 		if (page_no != ibuf_rec_get_page_no(mtr, rec)
@@ -2818,12 +2818,12 @@ corruption:
 count_later:
 	rec = btr_pcur_get_rec(pcur);
 
-	if (!page_rec_is_supremum(rec)) {
-		rec = page_rec_get_next_const(rec);
+	if (rec != page + PAGE_OLD_SUPREMUM) {
+		rec = page_rec_next_get<false>(page, rec);
 	}
 
-	for (; !page_rec_is_supremum(rec);
-	     rec = page_rec_get_next_const(rec)) {
+	for (; rec != page + PAGE_OLD_SUPREMUM;
+	     rec = page_rec_next_get<false>(page, rec)) {
 		if (UNIV_UNLIKELY(!rec)) {
 			return srv_page_size;
 		}
@@ -2864,11 +2864,11 @@ count_later:
 		return 0;
 	}
 
-	rec = page_get_infimum_rec(next_page);
-	rec = page_rec_get_next_const(rec);
+	rec = page_rec_next_get<false>(next_page,
+				       next_page + PAGE_OLD_INFIMUM);
 
-	for (; ; rec = page_rec_get_next_const(rec)) {
-		if (!rec || page_rec_is_supremum(rec)) {
+	for (;; rec = page_rec_next_get<false>(next_page, rec)) {
+		if (!rec || rec == next_page + PAGE_OLD_SUPREMUM) {
 			/* We give up */
 			return(srv_page_size);
 		}
@@ -3591,16 +3591,26 @@ ibuf_insert_to_index_page(
 	assert_block_ahi_empty(block);
 #endif /* BTR_CUR_HASH_ADAPT */
 	ut_ad(mtr->is_named_space(block->page.id().space()));
+        const auto comp = page_is_comp(page);
 
-	if (UNIV_UNLIKELY(dict_table_is_comp(index->table)
-			  != (ibool)!!page_is_comp(page))) {
+	if (UNIV_UNLIKELY(index->table->not_redundant() != !!comp)) {
 		return DB_CORRUPTION;
 	}
 
-	rec = page_rec_get_next(page_get_infimum_rec(page));
-
-	if (!rec || page_rec_is_supremum(rec)) {
-		return DB_CORRUPTION;
+	if (comp) {
+		rec = const_cast<rec_t*>(
+			page_rec_next_get<true>(page,
+						page + PAGE_NEW_INFIMUM));
+		if (!rec || rec == page + PAGE_NEW_SUPREMUM) {
+			return DB_CORRUPTION;
+		}
+	} else {
+		rec = const_cast<rec_t*>(
+			page_rec_next_get<false>(page,
+						page + PAGE_OLD_INFIMUM));
+		if (!rec || rec == page + PAGE_OLD_SUPREMUM) {
+			return DB_CORRUPTION;
+		}
 	}
 
 	if (!rec_n_fields_is_sane(index, rec, entry)) {
