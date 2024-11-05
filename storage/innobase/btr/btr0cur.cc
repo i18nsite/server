@@ -3424,9 +3424,9 @@ btr_cur_update_in_place(
 
 #ifdef BTR_CUR_HASH_ADAPT
 	{
-                const dict_index_t *const block_index = block->index;
-
-		if (block_index) {
+		auto part = block->index
+			? &btr_search.get_part(*index) : nullptr;
+		if (part) {
 			/* TO DO: Can we skip this if none of the fields
 			index->search_info->curr_n_fields
 			are being updated? */
@@ -3444,7 +3444,7 @@ btr_cur_update_in_place(
 				btr_search_update_hash_on_delete(cursor);
 			}
 
-			btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
+			part->latch.wr_lock(SRW_LOCK_CALL);
 		}
 
 		assert_block_ahi_valid(block);
@@ -3454,8 +3454,8 @@ btr_cur_update_in_place(
 					 mtr);
 
 #ifdef BTR_CUR_HASH_ADAPT
-		if (block_index) {
-			btr_search.parts.latch.wr_unlock();
+		if (part) {
+			part->latch.wr_unlock();
 		}
 	}
 #endif /* BTR_CUR_HASH_ADAPT */

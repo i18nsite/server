@@ -2166,6 +2166,9 @@ static bool innodb_init_param()
 
 	srv_page_size = 0;
 	srv_page_size_shift = 0;
+#ifdef BTR_CUR_HASH_ADAPT
+	btr_search.n_parts = 1;
+#endif /* BTR_CUR_HASH_ADAPT */
 
 	if (innobase_page_size != (1LL << 14)) {
 		size_t n_shift = get_bit_shift(size_t(innobase_page_size));

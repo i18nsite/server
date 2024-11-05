@@ -55,7 +55,7 @@ btr_search_guess_on_hash(
 	page_cur_mode_t	mode,
 	btr_latch_mode	latch_mode,
 	btr_cur_t*	cursor,
-	mtr_t*		mtr);
+	mtr_t*		mtr) noexcept;
 
 /** Move or delete hash entries for moved records, usually in a page split.
 If new_block is already hashed, then any hash index for block is dropped.
@@ -63,10 +63,8 @@ If new_block is not hashed, and block is hashed, then a new hash index is
 built to new_block with the same parameters as block.
 @param[in,out]	new_block	destination page
 @param[in,out]	block		source page (subject to deletion later) */
-void
-btr_search_move_or_delete_hash_entries(
-	buf_block_t*	new_block,
-	buf_block_t*	block);
+void btr_search_move_or_delete_hash_entries(buf_block_t *new_block,
+                                            buf_block_t *block) noexcept;
 
 /** Drop any adaptive hash index entries that point to an index page.
 @param[in,out]	block	block containing index page, s- or x-latched, or an
@@ -82,34 +80,28 @@ void btr_search_drop_page_hash_index(buf_block_t* block,
 /** Drop possible adaptive hash index entries when a page is evicted
 from the buffer pool or freed in a file, or the index is being dropped.
 @param[in]	page_id		page id */
-void btr_search_drop_page_hash_when_freed(const page_id_t page_id);
+void btr_search_drop_page_hash_when_freed(const page_id_t page_id) noexcept;
 
-/** Updates the page hash index when a single record is inserted on a page.
-@param[in]	cursor	cursor which was positioned to the place to insert
-			using btr_cur_search_, and the new record has been
-			inserted next to the cursor. */
-void btr_search_update_hash_node_on_insert(btr_cur_t *cursor);
+/** Update the page hash index after a single record is inserted on a page.
+@param cursor cursor which was positioned before the inserted record */
+void btr_search_update_hash_node_on_insert(btr_cur_t *cursor) noexcept;
 
-/** Updates the page hash index when a single record is inserted on a page.
-@param[in,out]	cursor		cursor which was positioned to the
-				place to insert using btr_cur_search_...,
-				and the new record has been inserted next
-				to the cursor */
-void btr_search_update_hash_on_insert(btr_cur_t *cursor);
+/** Update the page hash index after a single record is inserted on a page.
+@param cursor cursor which was positioned before the inserted record */
+void btr_search_update_hash_on_insert(btr_cur_t *cursor) noexcept;
 
-/** Updates the page hash index when a single record is deleted from a page.
-@param[in]	cursor	cursor which was positioned on the record to delete
-			using btr_cur_search_, the record is not yet deleted.*/
-void btr_search_update_hash_on_delete(btr_cur_t *cursor);
+/** Updates the page hash index before a single record is deleted from a page.
+@param cursor   cursor positioned on the to-be-deleted record */
+void btr_search_update_hash_on_delete(btr_cur_t *cursor) noexcept;
 
 /** Validates the search system.
 @param thd   connection, for checking if CHECK TABLE has been killed
 @return true if ok */
-bool btr_search_validate(THD *thd);
+bool btr_search_validate(THD *thd) noexcept;
 
 # ifdef UNIV_DEBUG
 /** @return if the index is marked as freed */
-bool btr_search_check_marked_free_index(const buf_block_t *block);
+bool btr_search_check_marked_free_index(const buf_block_t *block) noexcept;
 # endif /* UNIV_DEBUG */
 
 struct ahi_node;
@@ -180,7 +172,20 @@ struct btr_sea
   };
 
   /** Partitions of the adaptive hash index */
-  partition parts;
+  partition *parts;
+
+  /** innodb_adaptive_hash_index_parts */
+  ulong n_parts;
+
+  /** Get an adaptive hash index partition */
+  partition &get_part(index_id_t id) const noexcept
+  { return parts[id % n_parts]; }
+
+  /** Get an adaptive hash index partition */
+  partition &get_part(const dict_index_t &index) const noexcept
+  {
+    return get_part(index.id);
+  }
 
   /** Create and initialize at startup */
   void create() noexcept;
@@ -198,29 +203,13 @@ struct btr_sea
 extern btr_sea btr_search;
 
 /** Lock all search latches in exclusive mode. */
-static inline void btr_search_x_lock_all() noexcept
-{
-  btr_search.parts.latch.wr_lock(SRW_LOCK_CALL);
-}
-
+void btr_search_x_lock_all() noexcept;
 /** Unlock all search latches from exclusive mode. */
-static inline void btr_search_x_unlock_all() noexcept
-{
-  btr_search.parts.latch.wr_unlock();
-}
-
+void btr_search_x_unlock_all() noexcept;
 /** Lock all search latches in shared mode. */
-static inline void btr_search_s_lock_all() noexcept
-{
-  btr_search.parts.latch.rd_lock(SRW_LOCK_CALL);
-}
-
+void btr_search_s_lock_all() noexcept;
 /** Unlock all search latches from shared mode. */
-static inline void btr_search_s_unlock_all() noexcept
-{
-  btr_search.parts.latch.rd_unlock();
-}
-
+void btr_search_s_unlock_all() noexcept;
 # ifdef UNIV_SEARCH_PERF_STAT
 /** Number of successful adaptive hash index lookups */
 extern ulint	btr_search_n_succ;
