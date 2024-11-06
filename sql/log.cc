@@ -137,13 +137,6 @@ static ulonglong binlog_status_group_commit_trigger_timeout;
 static char binlog_snapshot_file[FN_REFLEN];
 static ulonglong binlog_snapshot_position;
 
-static const char *fatal_log_error=
-  "Could not use %s for logging (error %d). "
-  "Turning logging off for the whole duration of the MariaDB server process. "
-  "To turn it on again: fix the cause, shutdown the MariaDB server and "
-  "restart it.";
-
-
 static SHOW_VAR binlog_status_vars_detail[]=
 {
   {"commits",
@@ -2910,6 +2903,33 @@ end:
 
 /** `--binlog_error_action`, one of enum_binlog_error_action (`sql/mysqld.h`) */
 ulong binlog_error_action;
+/** Fail if binlog_error_action is ABORT_SERVER ~~or above~~,
+    or complain the previous `fatal_log_error` message otherwise */
+static void fatal_log_error(const char *name, int error_id= errno)
+{
+  if (binlog_error_action >= ABORT_SERVER)
+  {
+    THD *thd= current_thd;
+    /*
+      On fatal error when code enters here we should forcefully clear the
+      previous errors so that a new critical error message can be pushed
+      to the client side.
+    */
+    thd->clear_error();
+    static const char *abort_error=
+      "Either disk is full or file system is read only while opening the binlog. "
+      "Aborting the server";
+    //XXX: MySQL needs both error calls. mysql/mysql-server@3b6b4bf8c5
+    my_error(ER_BINLOG_LOGGING_IMPOSSIBLE, MYF(0), abort_error);
+    sql_print_error("Could not use %s for logging (error %d). %s", name, error_id, abort_error);
+    thd->protocol->end_statement();
+    _exit(EXIT_FAILURE);
+  } // no return
+  sql_print_error("Could not use %s for logging (error %d). "
+                 "Turning logging off for the whole duration of the MariaDB server process. "
+                 "To turn it on again: fix the cause, shutdown the MariaDB server and restart it.",
+                  name, errno);
+}
 
 bool MYSQL_LOG::init_and_set_log_file_name(const char *log_name,
                                            const char *new_name,
@@ -2983,9 +3003,10 @@ bool MYSQL_LOG::open(
     This is only used when called from MYSQL_BINARY_LOG::open, which
     has already updated log_file_name.
    */
-  if (log_type_arg != LOG_UNKNOWN &&
-      init_and_set_log_file_name(name, new_name, next_log_number,
-                                 log_type_arg, io_cache_type_arg))
+  if ((log_type_arg != LOG_UNKNOWN &&
+       init_and_set_log_file_name(name, new_name, next_log_number,
+                                  log_type_arg, io_cache_type_arg)) ||
+      (DBUG_IF("fault_injection_init_name") && log_type == LOG_BIN))
     goto err;
 
   is_fifo = my_stat(log_file_name, &f_stat, MYF(0)) &&
@@ -3050,7 +3071,7 @@ bool MYSQL_LOG::open(
   DBUG_RETURN(0);
 
 err:
-  sql_print_error(fatal_log_error, name, errno);
+  fatal_log_error(name);
   if (file >= 0)
     mysql_file_close(file, MYF(0));
   end_io_cache(&log_file);
@@ -4271,10 +4292,10 @@ err:
     purge_index_entry(NULL, NULL, need_mutex);
   close_purge_index_file();
 #endif
-  sql_print_error(fatal_log_error, (name) ? name : log_name, tmp_errno);
   if (new_xid_list_entry)
     delete new_xid_list_entry;
   close(LOG_CLOSE_INDEX);
+  fatal_log_error(name ? name : log_name, tmp_errno);
   DBUG_RETURN(1);
 }
 
@@ -6035,7 +6056,7 @@ end:
        - ...
     */
     close(LOG_CLOSE_INDEX);
-    sql_print_error(fatal_log_error, new_name_ptr, errno);
+    fatal_log_error(new_name_ptr);
   }
 
   mysql_mutex_unlock(&LOCK_index);
