@@ -68,21 +68,10 @@ inline ulint ut_rnd_interval(ulint n)
   return n > 1 ? static_cast<ulint>(ut_rnd_gen() % n) : 0;
 }
 
-/** Generate a hash value.
-@param key          initial key
-@param table_size   hash array size, preferrably a prime
-random number to work reliably.
-@return hash value */
-inline ulint ut_hash_ulint(ulint key, ulint table_size) noexcept
-{
-  return (key ^ 1653893711) % table_size;
-}
-
 # if SIZEOF_SIZE_T < 8
 inline size_t ut_fold_ull(uint64_t d) noexcept
 {
-  size_t n1= uint32_t(d), n2= uint32_t(d >> 32);
-  return ((((n1 ^ n2 ^ 1653893711) << 8) + n1) ^ 1463735687) + n2;
+  return size_t(d) ^ size_t(d >> (SIZEOF_SIZE_T * CHAR_BIT));
 }
 # else
 #  define ut_fold_ull(d) d
