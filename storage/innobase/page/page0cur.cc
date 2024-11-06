@@ -701,7 +701,8 @@ bool btr_cur_t::check_mismatch(const dtuple_t& tuple, page_cur_mode_t mode,
     if (!(other= page_rec_get_prev_const(rec)))
       return true;
     page= page_cur.block->page.frame;
-    if (other - page == (comp ? PAGE_NEW_INFIMUM : PAGE_OLD_INFIMUM))
+    if (uintptr_t(other - page) ==
+        (comp ? PAGE_NEW_INFIMUM : PAGE_OLD_INFIMUM))
       return page_has_prev(page);
     if (UNIV_LIKELY(comp != 0))
       switch (rec_get_status(other)) {
