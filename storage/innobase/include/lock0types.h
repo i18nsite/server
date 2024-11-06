@@ -244,6 +244,9 @@ struct ib_lock_t
 
 	const char* type_string() const
 	{ return is_table() ? "LOCK_TABLE" : "LOCK_REC"; }
+        lock_t *conflicting;
+        lock_t *bypassed;
+        lock_t *insert_after;
 };
 
 typedef UT_LIST_BASE_NODE_T(ib_lock_t) trx_lock_list_t;

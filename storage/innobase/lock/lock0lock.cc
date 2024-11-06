@@ -913,36 +913,6 @@ Checks if a transaction has a GRANTED explicit lock on rec stronger or equal
 to precise_mode.
 @return lock or NULL */
 UNIV_INLINE
-bool
-lock_rec_has_expl(
-/*==============*/
-	ulint			precise_mode,/*!< in: LOCK_S or LOCK_X
-					possibly ORed to LOCK_GAP or
-					LOCK_REC_NOT_GAP, for a
-					supremum record we regard this
-					always a gap type request */
-	const lock_t *lock,
-	const trx_t*		trx,
-	bool is_supremum)	/*!< in: transaction */
-{
-    if (lock->trx == trx &&
-	!(lock->type_mode & (LOCK_WAIT | LOCK_INSERT_INTENTION)) &&
-	(!((LOCK_REC_NOT_GAP | LOCK_GAP) & lock->type_mode) ||
-	 is_supremum ||
-	 ((LOCK_REC_NOT_GAP | LOCK_GAP) & precise_mode & lock->type_mode)) &&
-	lock_mode_stronger_or_eq(lock->mode(), static_cast<lock_mode>
-				 (precise_mode & LOCK_MODE_MASK)))
-      return true;
-
-  return false;
-}
-
-
-/*********************************************************************//**
-Checks if a transaction has a GRANTED explicit lock on rec stronger or equal
-to precise_mode.
-@return lock or NULL */
-UNIV_INLINE
 lock_t*
 lock_rec_has_expl(
 /*==============*/
@@ -962,8 +932,14 @@ lock_rec_has_expl(
 
   for (lock_t *lock= lock_sys_t::get_first(cell, id, heap_no); lock;
        lock= lock_rec_get_next(heap_no, lock))
-    if (lock_rec_has_expl(precise_mode, lock, trx,
-                          heap_no == PAGE_HEAP_NO_SUPREMUM))
+
+    if (lock->trx == trx &&
+       !(lock->type_mode & (LOCK_WAIT | LOCK_INSERT_INTENTION)) &&
+       (!((LOCK_REC_NOT_GAP | LOCK_GAP) & lock->type_mode) ||
+        heap_no == PAGE_HEAP_NO_SUPREMUM ||
+        ((LOCK_REC_NOT_GAP | LOCK_GAP) & precise_mode & lock->type_mode)) &&
+       lock_mode_stronger_or_eq(lock->mode(), static_cast<lock_mode>
+                                (precise_mode & LOCK_MODE_MASK)))
       return lock;
   return nullptr;
 }
@@ -1108,12 +1084,14 @@ func_exit:
     if (lock_t *lock= lock_sys_t::get_first(cell, id))
     {
       const ulint heap_no= lock_rec_find_set_bit(wait_lock);
+/*
 #ifdef UNIV_DEBUG
       bool is_supremum= (heap_no == PAGE_HEAP_NO_SUPREMUM);
       bool has_s_lock_or_stronger= false;
       bool mode_is_not_ii_and_x = !wait_lock->is_insert_intention()
         && wait_lock->mode() == LOCK_X;
 #endif
+*/
       if (!lock_rec_get_nth_bit(lock, heap_no))
         lock= lock_rec_get_next(heap_no, lock);
       do
@@ -1131,6 +1109,7 @@ func_exit:
         {
           if (wsrep_thd_is_BF(lock->trx->mysql_thd, false))
           {
+/*
 #ifdef UNIV_DEBUG
              if (mode_is_not_ii_and_x &&
                  lock_rec_has_expl(
@@ -1139,6 +1118,7 @@ func_exit:
                 continue;
              }
 #endif
+*/
             // There is no need to kill victim with compatible lock
             if (!lock_has_to_wait(trx->lock.wait_lock, lock))
               continue;
@@ -1148,11 +1128,12 @@ func_exit:
                conflicting.
             2. The lock is placed before bypassed lock in
                lock_rec_create_low(). */
+/*
             ut_ad(!(lock->is_waiting() && lock->trx->lock.wait_trx == trx &&
                     !lock->is_insert_intention() &&
                     (!lock->is_gap() || !is_supremum) &&
                     lock->mode() == LOCK_X && has_s_lock_or_stronger));
-
+*/
 #ifdef UNIV_DEBUG
             wsrep_report_error(lock, trx);
 #endif
@@ -1210,26 +1191,24 @@ lock_rec_other_has_conflicting(unsigned mode, const hash_cell_t &cell,
                                const trx_t *trx)
 {
   bool is_supremum= (heap_no == PAGE_HEAP_NO_SUPREMUM);
+  bool bypass_mode= !is_supremum && !(mode & LOCK_INSERT_INTENTION) &&
+                    !(mode & LOCK_GAP) && (mode & LOCK_MODE_MASK) == LOCK_X;
   bool has_s_lock_or_stronger= false;
-  bool mode_is_not_ii_and_x = !(mode & LOCK_INSERT_INTENTION)
-      && (mode & LOCK_MODE_MASK) == LOCK_X;
   lock_t *insert_after= nullptr;
   lock_t *bypassed= nullptr;
 
   for (lock_t *lock= lock_sys_t::get_first(cell, id, heap_no); lock;
        lock= lock_rec_get_next(heap_no, lock))
   {
-
-    if (mode_is_not_ii_and_x &&
-        lock_rec_has_expl(LOCK_S | LOCK_REC_NOT_GAP, lock, trx, is_supremum))
+    if (bypass_mode && lock->trx == trx && !lock->is_gap() &&
+        !lock->is_waiting() && !lock->is_insert_intention() &&
+        lock_mode_stronger_or_eq(lock->mode(), LOCK_S))
     {
       has_s_lock_or_stronger= true;
       if (!bypassed)
         insert_after= lock;
       continue;
     }
-    if (lock->trx == trx && !bypassed)
-      insert_after= lock;
     if (lock_rec_has_to_wait(trx, mode, lock, is_supremum))
     {
       /* There is no need to lock lock_sys.wait_mutex to check
@@ -1244,13 +1223,14 @@ lock_rec_other_has_conflicting(unsigned mode, const hash_cell_t &cell,
       for conflicting lock will always start with the first lock for the
       heap_no, and go ahead with the same order(the order of the locks in the
       cell array) */
-      if (lock->is_waiting() && lock->trx->lock.wait_trx == trx &&
-          !lock->is_insert_intention() && (!lock->is_gap() || !is_supremum) &&
-          lock->mode() == LOCK_X && has_s_lock_or_stronger) {
-          bypassed = lock;
+      if (bypass_mode && lock->is_waiting() &&
+          lock->trx->lock.wait_trx == trx && !lock->is_insert_intention() &&
+          !lock->is_gap() && lock->mode() == LOCK_X && has_s_lock_or_stronger)
+      {
+        bypassed = lock;
         continue;
       }
-      return {lock, bypassed ? insert_after : nullptr, bypassed};
+      return {lock, nullptr, bypassed};
     }
   }
 
@@ -1447,6 +1427,9 @@ lock_rec_create_low(
 	lock->type_mode = type_mode;
 	lock->index = index;
 	lock->un_member.rec_lock.page_id = page_id;
+	lock->insert_after= c_lock_info.insert_after;
+	lock->bypassed = c_lock_info.bypassed;
+	lock->conflicting = c_lock_info.conflicting;
 
 	if (UNIV_LIKELY(!(type_mode & (LOCK_PREDICATE | LOCK_PRDT_PAGE)))) {
 		lock->un_member.rec_lock.n_bits = uint32_t(n_bytes * 8);
@@ -1461,7 +1444,7 @@ lock_rec_create_low(
 
 	const auto lock_hash = &lock_sys.hash_get(type_mode);
 	hash_cell_t& cell = *lock_hash->cell_get(page_id.fold());
-	if (UNIV_LIKELY(c_lock_info.conflicting || !c_lock_info.insert_after))
+	if (UNIV_LIKELY(!c_lock_info.insert_after))
 		cell.append(*lock, &lock_t::hash);
 	else
 		cell.insert_after(*c_lock_info.insert_after, *lock,
@@ -1914,10 +1897,12 @@ lock_rec_has_to_wait_in_queue(const hash_cell_t &cell, const lock_t *wait_lock)
 	ut_ad(!wait_lock->is_table());
 
 	heap_no = lock_rec_find_set_bit(wait_lock);
+        /*
 	bool is_supremum= (heap_no == PAGE_HEAP_NO_SUPREMUM);
 	bool has_s_lock_or_stronger= false;
 	bool mode_is_not_ii_and_x = !wait_lock->is_insert_intention()
 	  && wait_lock->mode() == LOCK_X;
+*/
 
 	bit_offset = heap_no / 8;
 	bit_mask = static_cast<ulint>(1) << (heap_no % 8);
@@ -1927,6 +1912,7 @@ lock_rec_has_to_wait_in_queue(const hash_cell_t &cell, const lock_t *wait_lock)
 	     lock != wait_lock;
 	     lock = lock_rec_get_next_on_page_const(lock)) {
 		const byte*	p = (const byte*) &lock[1];
+                /*
 		if (mode_is_not_ii_and_x
 		    && lock_rec_has_expl(
 		      LOCK_S | LOCK_REC_NOT_GAP, lock, wait_lock->trx,
@@ -1935,9 +1921,11 @@ lock_rec_has_to_wait_in_queue(const hash_cell_t &cell, const lock_t *wait_lock)
 		  has_s_lock_or_stronger= true;
 		  continue;
 		}
+                */
 		if (heap_no < lock_rec_get_n_bits(lock)
 		    && (p[bit_offset] & bit_mask)
 		    && lock_has_to_wait(wait_lock, lock)) {
+                  /*
 		  if (lock->is_waiting()
 		      && lock->trx->lock.wait_trx == wait_lock->trx
 		      && !lock->is_insert_intention()
@@ -1945,6 +1933,7 @@ lock_rec_has_to_wait_in_queue(const hash_cell_t &cell, const lock_t *wait_lock)
 		      && lock->mode() == LOCK_X
 		      && has_s_lock_or_stronger)
 		    continue;
+                    */
 			return(lock);
 		}
 	}
@@ -4384,10 +4373,12 @@ released:
 					g.cell(), first_lock, heap_no);
 }
 
+static void lock_rec_queue_validate(const lock_t *lock);
+
 /** Release the explicit locks of a committing transaction,
 and release possible other transactions waiting because of these locks.
 @return whether the operation succeeded */
-TRANSACTIONAL_TARGET static bool lock_release_try(trx_t *trx)
+TRANSACTIONAL_TARGET static bool lock_release_try(trx_t *trx, ulint i)
 {
   /* At this point, trx->lock.trx_locks cannot be modified by other
   threads, because our transaction has been committed.
@@ -4428,11 +4419,16 @@ restart:
       auto &lock_hash= lock_sys.hash_get(lock->type_mode);
       auto cell= lock_hash.cell_get(lock->un_member.rec_lock.page_id.fold());
       auto latch= lock_sys_t::hash_table::latch(cell);
+      if (i < 4 && ut_rnd_interval(2))
+        all_released=false;
+      else
       if (!latch->try_acquire())
         all_released= false;
       else
       {
+        lock_rec_queue_validate(lock);
         lock_rec_dequeue_from_page(lock, false);
+        lock_rec_queue_validate(lock);
         latch->release();
       }
     }
@@ -4459,6 +4455,7 @@ restart:
 
   lock_sys.rd_unlock();
   trx->mutex_unlock();
+  //my_sleep(10000);
   if (all_released && !count)
     goto restart;
   return all_released;
@@ -4479,7 +4476,7 @@ void lock_release(trx_t *trx)
   ulint count;
 
   for (count= 5; count--; )
-    if (lock_release_try(trx))
+    if (lock_release_try(trx, count))
       goto released;
 
   /* Fall back to acquiring lock_sys.latch in exclusive mode */
@@ -5468,6 +5465,39 @@ func_exit:
 	}
 
 	goto func_exit;
+}
+
+static void lock_rec_queue_validate(const lock_t *lock)
+{
+  auto page_id= lock->un_member.rec_lock.page_id;
+  auto cell= lock_sys.rec_hash.cell_get(page_id.fold());
+
+  for (ulint heap_no= PAGE_HEAP_NO_USER_LOW;
+       heap_no < lock_rec_get_n_bits(lock); ++heap_no)
+  {
+    if (!lock_rec_get_nth_bit(lock, heap_no))
+      continue;
+    for (const lock_t *checked_lock=
+             lock_sys_t::get_first(*cell, page_id, heap_no);
+         checked_lock != NULL;
+         checked_lock= lock_rec_get_next_const(heap_no, checked_lock))
+    {
+      if (checked_lock->is_waiting())
+      {
+        ut_a(checked_lock->is_gap() ||
+             lock_rec_has_to_wait_in_queue(*cell, checked_lock));
+      }
+      else if (!checked_lock->is_gap())
+      {
+        const lock_mode mode= checked_lock->mode() == LOCK_S ? LOCK_X : LOCK_S;
+
+        const lock_t *other_lock= lock_rec_other_has_expl_req(
+            mode, *cell, page_id, false, heap_no,
+            checked_lock->trx);
+        ut_ad(!other_lock);
+      }
+    }
+  }
 }
 
 /** Validate the record lock queues on a page.
