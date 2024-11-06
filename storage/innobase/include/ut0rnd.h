@@ -71,7 +71,7 @@ inline ulint ut_rnd_interval(ulint n)
 # if SIZEOF_SIZE_T < 8
 inline size_t ut_fold_ull(uint64_t d) noexcept
 {
-  return size_t(d) ^ size_t(d >> (SIZEOF_SIZE_T * CHAR_BIT));
+  return size_t(d) * 31 + size_t(d >> (SIZEOF_SIZE_T * CHAR_BIT));
 }
 # else
 #  define ut_fold_ull(d) d
