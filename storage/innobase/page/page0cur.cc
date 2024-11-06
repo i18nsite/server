@@ -538,9 +538,11 @@ static int cmp_dtuple_rec(const dtuple_t &dtuple, const rec_t *rec,
   ut_ad(dtuple.n_fields_cmp > 0);
   ut_ad(dtuple.n_fields_cmp <= index.n_core_fields || index.is_ibuf());
   ut_ad(cur_field <= dtuple.n_fields_cmp);
-  ut_ad(!leaf || page_rec_is_leaf(rec));
+  ut_ad(leaf == page_rec_is_leaf(rec));
   ut_ad(!leaf || !(rec_get_info_bits(rec, comp) & REC_INFO_MIN_REC_FLAG));
   ut_ad(!leaf || !(dtuple.info_bits & REC_INFO_MIN_REC_FLAG));
+  ut_ad(leaf || !index.is_spatial() ||
+        dtuple.n_fields_cmp == DICT_INDEX_SPATIAL_NODEPTR_SIZE + 1);
   int ret= 0;
 
   if (leaf);
@@ -620,6 +622,17 @@ static int cmp_dtuple_rec(const dtuple_t &dtuple, const rec_t *rec,
       {
         const dfield_t *df= dtuple_get_nth_field(&dtuple, i);
         ut_ad(!dfield_is_ext(df));
+        if (!leaf && i == DICT_INDEX_SPATIAL_NODEPTR_SIZE &&
+            index.is_spatial())
+        {
+          /* SPATIAL INDEX non-leaf records comprise
+          MBR (minimum bounding rectangle) and the child page number.
+          The function rtr_cur_restore_position() includes the
+          child page number in the search key, because the MBR alone
+          would not be unique. */
+          ut_ad(dtuple.fields[DICT_INDEX_SPATIAL_NODEPTR_SIZE].len == 4);
+          len= 4;
+        }
         ret= cmp_data_data(df->type.mtype, df->type.prtype,
                            static_cast<const byte*>(df->data), df->len,
                            f, len);
@@ -649,6 +662,16 @@ static int cmp_dtuple_rec(const dtuple_t &dtuple, const rec_t *rec,
     *matched_fields= uint16_t(cur_field);
   }
   return ret;
+}
+
+static int cmp_dtuple_rec(const dtuple_t &dtuple, const rec_t *rec,
+                          const dict_index_t &index,
+                          uint16_t *matched_fields, ulint comp, bool leaf)
+  noexcept
+{
+  return leaf
+    ? cmp_dtuple_rec<true>(dtuple, rec, index, matched_fields, comp)
+    : cmp_dtuple_rec<false>(dtuple, rec, index, matched_fields, comp);
 }
 
 #ifdef BTR_CUR_HASH_ADAPT
@@ -866,7 +889,7 @@ bool page_cur_search_with_match(const dtuple_t *tuple, page_cur_mode_t mode,
     if (UNIV_UNLIKELY(!mid_rec))
       return true;
     uint16_t cur= std::min(low_fields, up_fields);
-    int cmp= cmp_dtuple_rec<false>(*tuple, mid_rec, index, &cur, comp);
+    int cmp= cmp_dtuple_rec(*tuple, mid_rec, index, &cur, comp, leaf);
     if (cmp > 0)
     low_slot_match:
       low= mid, low_fields= cur;
@@ -900,10 +923,7 @@ bool page_cur_search_with_match(const dtuple_t *tuple, page_cur_mode_t mode,
       break;
 
     uint16_t cur= std::min(low_fields, up_fields);
-    int cmp;
-
-    cmp= cmp_dtuple_rec<false>(*tuple, mid_rec, index, &cur, comp);
-
+    int cmp= cmp_dtuple_rec(*tuple, mid_rec, index, &cur, comp, leaf);
     if (cmp > 0)
     low_rec_match:
       low_rec= mid_rec, low_fields= cur;
