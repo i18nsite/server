@@ -1780,7 +1780,8 @@ page_alloc:
 	}
 
 	mtr->write<2>(*block, byte_offset + FSEG_HDR_OFFSET
-		      + block->page.frame, inode - iblock->page.frame);
+		      + block->page.frame,
+		      uintptr_t(inode - iblock->page.frame));
 
 	mtr->write<4>(*block, byte_offset + FSEG_HDR_PAGE_NO
 		      + block->page.frame, iblock->page.id().page_no());
@@ -1922,12 +1923,12 @@ fseg_alloc_free_extent(
 	mtr_t*			mtr,
 	dberr_t*		err)
 {
-  ut_ad(!((page_offset(inode) - FSEG_ARR_OFFSET) % FSEG_INODE_SIZE));
   ut_ad(iblock->page.frame == page_align(inode));
+  ut_ad(!(inode - iblock->page.frame - FSEG_ARR_OFFSET) % FSEG_INODE_SIZE);
   ut_ad(!memcmp(FSEG_MAGIC_N_BYTES, FSEG_MAGIC_N + inode, 4));
   ut_d(space->modify_check(*mtr));
 
-  if (UNIV_UNLIKELY(inode - iblock->page.frame < FSEG_ARR_OFFSET))
+  if (UNIV_UNLIKELY(uintptr_t(inode - iblock->page.frame) < FSEG_ARR_OFFSET))
   {
   corrupted:
     *err= DB_CORRUPTION;

@@ -894,12 +894,12 @@ page_delete_rec_list_end(
     return DB_SUCCESS;
   }
 
-  if (rec - page ==
-      (page_is_comp(page) ? PAGE_NEW_INFIMUM : PAGE_OLD_INFIMUM) ||
-      n_recs == page_get_n_recs(page) ||
-      rec == (page_is_comp(page)
-              ? page_rec_next_get<true>(page, page + PAGE_NEW_INFIMUM)
-              : page_rec_next_get<false>(page, page + PAGE_OLD_INFIMUM)))
+  if (n_recs == page_get_n_recs(page) ||
+      (page_is_comp(page)
+       ? (rec == page + PAGE_NEW_INFIMUM ||
+          rec == page_rec_next_get<true>(page, page + PAGE_NEW_INFIMUM))
+       : (rec == page + PAGE_OLD_INFIMUM ||
+          rec == page_rec_next_get<false>(page, page + PAGE_OLD_INFIMUM))))
   {
     /* We are deleting all records. */
     page_create_empty(block, index, mtr);

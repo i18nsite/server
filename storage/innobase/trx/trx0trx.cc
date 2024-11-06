@@ -1058,7 +1058,7 @@ void trx_t::commit_empty(mtr_t *mtr)
         mtr->write<2>(*u, TRX_UNDO_SEG_HDR + TRX_UNDO_STATE + u->page.frame,
                       TRX_UNDO_CACHED);
         mtr->write<2>(*u, TRX_UNDO_SEG_HDR + TRX_UNDO_LAST_LOG + u->page.frame,
-                      prev - u->page.frame);
+                      uintptr_t(prev - u->page.frame));
         mtr->write<2>(*u, prev + TRX_UNDO_NEXT_LOG, 0U);
         mtr->memset(u, free, srv_page_size - FIL_PAGE_DATA_END - free, 0);
 

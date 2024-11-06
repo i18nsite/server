@@ -205,7 +205,8 @@ inline void PageBulk::insertPage(rec_t *rec, rec_offs *offsets)
   else
   {
     memcpy(const_cast<rec_t*>(rec) - REC_NEXT, m_cur_rec - REC_NEXT, 2);
-    m_mtr.write<2>(*m_block, m_cur_rec - REC_NEXT, insert_rec - m_page);
+    m_mtr.write<2>(*m_block, m_cur_rec - REC_NEXT,
+                   uintptr_t(insert_rec - m_page));
     rec_set_bit_field_1(const_cast<rec_t*>(rec), 0,
                         REC_OLD_N_OWNED, REC_N_OWNED_MASK, REC_N_OWNED_SHIFT);
     rec_set_bit_field_2(const_cast<rec_t*>(rec),
