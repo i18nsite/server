@@ -539,14 +539,15 @@ static int cmp_dtuple_rec(const dtuple_t &dtuple, const rec_t *rec,
   ut_ad(dtuple.n_fields_cmp <= index.n_core_fields || index.is_ibuf());
   ut_ad(cur_field <= dtuple.n_fields_cmp);
   ut_ad(leaf == page_rec_is_leaf(rec));
-  ut_ad(!leaf || !(rec_get_info_bits(rec, comp) & REC_INFO_MIN_REC_FLAG));
-  ut_ad(!leaf || !(dtuple.info_bits & REC_INFO_MIN_REC_FLAG));
+  ut_ad(!leaf || !(rec_get_info_bits(rec, comp) & REC_INFO_MIN_REC_FLAG) ||
+        index.is_instant());
+  ut_ad(!leaf || !(dtuple.info_bits & REC_INFO_MIN_REC_FLAG) ||
+        index.is_instant());
   ut_ad(leaf || !index.is_spatial() ||
         dtuple.n_fields_cmp == DICT_INDEX_SPATIAL_NODEPTR_SIZE + 1);
   int ret= 0;
 
-  if (leaf);
-  else if (dtuple.info_bits & REC_INFO_MIN_REC_FLAG)
+  if (dtuple.info_bits & REC_INFO_MIN_REC_FLAG)
   {
     *matched_fields= 0;
     return -!(rec_get_info_bits(rec, comp) & REC_INFO_MIN_REC_FLAG);
