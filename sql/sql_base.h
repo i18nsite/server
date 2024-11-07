@@ -417,6 +417,19 @@ public:
   virtual bool handle_view(THD *thd, Query_tables_list *prelocking_ctx,
                            TABLE_LIST *table_list, bool *need_prelocking)= 0;
   virtual bool handle_end(THD *thd) { return 0; };
+
+  virtual bool may_need_prelocking(THD *thd, TABLE_LIST *table) const
+  {
+    return (table->updating && table->lock_type >= TL_FIRST_WRITE)
+           || thd->lex->default_used;
+  }
+
+  virtual TABLE_LIST::enum_open_strategy
+  get_fk_open_strategy(thr_lock_type lock_type) const
+  {
+    DBUG_ASSERT(!current_thd->lex->query_tables->updating); // should be DML
+    return TABLE_LIST::OPEN_STUB;
+  }
 };
 
 
@@ -438,6 +451,13 @@ public:
                     TABLE_LIST *table_list, bool *need_prelocking) override;
   bool handle_view(THD *thd, Query_tables_list *prelocking_ctx,
                    TABLE_LIST *table_list, bool *need_prelocking) override;
+
+  TABLE_LIST::enum_open_strategy
+  get_fk_open_strategy(thr_lock_type lock_type) const override
+  {
+    return lock_type < TL_FIRST_WRITE ? TABLE_LIST::OPEN_STUB
+                                      : TABLE_LIST::OPEN_NORMAL;
+  }
 };
 
 
@@ -484,6 +504,31 @@ public:
                    TABLE_LIST *table_list, bool *need_prelocking) override;
 };
 
+
+class Check_table_prelocking_strategy : public Prelocking_strategy
+{
+public:
+  bool handle_routine(THD *thd, Query_tables_list *prelocking_ctx,
+                      Sroutine_hash_entry *rt, sp_head *sp,
+                      bool *need_prelocking) override
+  { return FALSE; }
+  bool handle_table(THD *thd, Query_tables_list *prelocking_ctx,
+                    TABLE_LIST *table_list, bool *need_prelocking) override;
+  bool handle_view(THD *thd, Query_tables_list *prelocking_ctx,
+                   TABLE_LIST *table_list, bool *need_prelocking) override
+  { return FALSE; }
+
+  bool may_need_prelocking(THD *thd, TABLE_LIST *table) const override
+  {
+    return thd->lex->check_opt.flags & T_EXTEND;
+  }
+
+  TABLE_LIST::enum_open_strategy
+  get_fk_open_strategy(thr_lock_type lock_type) const override
+  {
+    return TABLE_LIST::OPEN_NORMAL;
+  }
+};
 
 inline bool
 open_tables(THD *thd, const DDL_options_st &options,

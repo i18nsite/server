@@ -2006,7 +2006,7 @@ typedef struct st_foreign_key_info
   LEX_CSTRING *foreign_db;
   LEX_CSTRING *foreign_table;
   LEX_CSTRING *referenced_db;
-   *referenced_table;
+  LEX_CSTRING *referenced_table;
   enum_fk_option update_method;
   enum_fk_option delete_method;
   Lex_ident_column *foreign_key_name;
@@ -2395,6 +2395,20 @@ struct TABLE_LIST
     vers_conditions.name= table->s->vers.name;
   }
 
+  /**
+     Indicates that if TABLE_LIST object corresponds to the table/view
+     which requires special handling.
+  */
+  enum enum_open_strategy
+  {
+    /* Normal open. */
+    OPEN_NORMAL= 0,
+    /* Associate a table share only if the the table exists. */
+    OPEN_IF_EXISTS,
+    /* Don't associate a table share. */
+    OPEN_STUB
+  };
+
   inline void init_one_table_for_prelocking(const LEX_CSTRING *db_arg,
                                             const LEX_CSTRING *table_name_arg,
                                             const LEX_CSTRING *alias_arg,
@@ -2403,6 +2417,7 @@ struct TABLE_LIST
                                             TABLE_LIST *belong_to_view_arg,
                                             uint8 trg_event_map_arg,
                                             TABLE_LIST ***last_ptr,
+                                            enum_open_strategy open_strat,
                                             my_bool insert_data)
 
   {
@@ -2415,8 +2430,7 @@ struct TABLE_LIST
     belong_to_view= belong_to_view_arg;
     trg_event_map= trg_event_map_arg;
     /* MDL is enough for read-only FK checks, we don't need the table */
-    if (prelocking_type == PRELOCK_FK && lock_type < TL_FIRST_WRITE)
-      open_strategy= OPEN_STUB;
+    open_strategy= open_strat;
 
     **last_ptr= this;
     prev_global= *last_ptr;
@@ -2739,19 +2753,7 @@ struct TABLE_LIST
     used for implicit LOCK TABLES only and won't be used in real statement.
   */
   prelocking_types prelocking_placeholder;
-  /**
-     Indicates that if TABLE_LIST object corresponds to the table/view
-     which requires special handling.
-  */
-  enum enum_open_strategy
-  {
-    /* Normal open. */
-    OPEN_NORMAL= 0,
-    /* Associate a table share only if the the table exists. */
-    OPEN_IF_EXISTS,
-    /* Don't associate a table share. */
-    OPEN_STUB
-  } open_strategy;
+  enum_open_strategy open_strategy;
   /** TRUE if an alias for this table was specified in the SQL. */
   bool          is_alias;
   /** TRUE if the table is referred to in the statement using a fully

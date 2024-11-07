@@ -9297,7 +9297,7 @@ int check_key_referential_integrity(const TABLE *table, const TABLE *ref_table,
                                         table->record[0],
                                         ref_table->record[0]))
     {
-      if (res == ER_KEY_NOT_FOUND)
+      if (res == HA_ERR_KEY_NOT_FOUND)
         table->file->print_error(res, ME_WARNING);
       is_ok= false;
     }
@@ -9387,14 +9387,13 @@ int check_foreign_key_relations(THD *thd, TABLE *table)
 
   for (const FOREIGN_KEY_INFO &fk: fk_list)
   {
-    const TABLE *ref_table= find_fk_open_table(thd, fk.referenced_db->str,
-                                               fk.referenced_db->length,
-                                               fk.referenced_table->str,
-                                               fk.referenced_table->length);
+    TABLE *ref_table= find_fk_open_table(thd, fk.referenced_db->str,
+                                         fk.referenced_db->length,
+                                         fk.referenced_table->str,
+                                         fk.referenced_table->length);
 
     const KEY *this_key= find_key_by_name(table, *fk.foreign_key_name),
                *ref_key= find_key_by_name(ref_table, *fk.referenced_key_name);
-
 
     if (!this_key)
       report_check_key_not_found(thd, *fk.referenced_key_name, table, fk);
@@ -9416,6 +9415,8 @@ int check_foreign_key_relations(THD *thd, TABLE *table)
       continue;
     }
 
+    ref_table->use_all_columns();
+
     uint kp_num= fk.foreign_fields.elements;
     int error= check_key_referential_integrity(table, ref_table, this_key,
                                                ref_key, kp_num, key_buf);
@@ -9426,10 +9427,10 @@ int check_foreign_key_relations(THD *thd, TABLE *table)
 
   for (const FOREIGN_KEY_INFO &fk: parent_fk_list)
   {
-    const TABLE *parent_table= find_fk_open_table(thd, fk.foreign_db->str,
-                                               fk.foreign_db->length,
-                                               fk.foreign_table->str,
-                                               fk.foreign_table->length);
+    TABLE *parent_table= find_fk_open_table(thd, fk.foreign_db->str,
+                                            fk.foreign_db->length,
+                                            fk.foreign_table->str,
+                                            fk.foreign_table->length);
 
     const KEY *this_key= find_key_by_name(table, *fk.referenced_key_name),
               *parent_key= find_key_by_name(parent_table, *fk.foreign_key_name);
@@ -9455,6 +9456,7 @@ int check_foreign_key_relations(THD *thd, TABLE *table)
       continue;
     }
 
+    parent_table->use_all_columns();
     int error= check_key_referential_integrity(parent_table, table,
                                                parent_key, this_key,
                                                fk.foreign_fields.elements,
