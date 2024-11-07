@@ -1924,7 +1924,7 @@ fseg_alloc_free_extent(
 	dberr_t*		err)
 {
   ut_ad(iblock->page.frame == page_align(inode));
-  ut_ad(!(inode - iblock->page.frame - FSEG_ARR_OFFSET) % FSEG_INODE_SIZE);
+  ut_ad(!((inode - iblock->page.frame - FSEG_ARR_OFFSET) % FSEG_INODE_SIZE));
   ut_ad(!memcmp(FSEG_MAGIC_N_BYTES, FSEG_MAGIC_N + inode, 4));
   ut_d(space->modify_check(*mtr));
 
