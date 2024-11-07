@@ -66,3 +66,41 @@ eval SELECT cont LIKE '%RELOAD DATABASE; # Shall generate syntax error%' AS `Con
 --enable_query_log
 
 remove_file $MYSQLTEST_VARDIR/tmp/binlog_incident-bug44442.sql;
+--echo #
+--echo # MDEV-25488 thd::transaction::modified_non_trans_tables is not set before Rows_log_event caching
+--echo #
+--connection default
+FLUSH LOGS;
+
+CREATE TABLE t1i (a TEXT) ENGINE = myisam;
+CREATE TABLE t2d (a TEXT) ENGINE = myisam;
+CREATE TABLE t3u (a TEXT) ENGINE = myisam;
+SET STATEMENT binlog_format=STATEMENT FOR INSERT INTO t2d VALUES (REPEAT('a', 4096)),(REPEAT('a', 4096)),(REPEAT('a', 4096));
+SET STATEMENT binlog_format=STATEMENT FOR INSERT INTO t3u VALUES (REPEAT('a', 4096)),(REPEAT('a', 4096)),(REPEAT('a', 4096));
+call mtr.add_suppression("Write to binary log failed: Multi-row statements required more than 'max_binlog_stmt_cache_size' bytes of storage");
+
+SET @max_binlog_stmt_cache_size         = @@global.max_binlog_stmt_cache_size;
+SET @binlog_stmt_cache_size             = @@global.    binlog_stmt_cache_size;
+SET @@global.max_binlog_stmt_cache_size = 4096;
+SET @@global.    binlog_stmt_cache_size = 4096;
+
+connect (con_i,localhost,root,,);
+--error ER_STMT_CACHE_FULL
+SET STATEMENT binlog_format=ROW FOR INSERT INTO t1i VALUES (REPEAT('a', 4096)),(REPEAT('a', 4096)),(REPEAT('a', 4096));
+
+connect (con_d,localhost,root,,);
+--error ER_STMT_CACHE_FULL
+SET STATEMENT binlog_format=ROW FOR DELETE FROM t2d;
+
+connect (con_u,localhost,root,,);
+--error ER_STMT_CACHE_FULL
+SET STATEMENT binlog_format=ROW FOR UPDATE t3u SET a = REPEAT('@', 4096);
+
+--connection default
+--let $binlog_file= query_get_value(SHOW MASTER STATUS, File, 1)
+--source include/show_binlog_events.inc
+
+SET @@global.max_binlog_stmt_cache_size = @max_binlog_stmt_cache_size;
+SET @@global.    binlog_stmt_cache_size = @binlog_stmt_cache_size;
+
+DROP TABLE t1i,t2d,t3u;
