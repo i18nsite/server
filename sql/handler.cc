@@ -9283,7 +9283,9 @@ int check_key_referential_integrity(const TABLE *table, const TABLE *ref_table,
   if (error)
     return error;
 
-  error= ref_table->file->ha_index_init(ref_key - ref_table->key_info, false);
+  uint keynr= ref_key - ref_table->key_info;
+
+  error= ref_table->file->ha_index_init(keynr, false);
   if (error)
     return error;
 
