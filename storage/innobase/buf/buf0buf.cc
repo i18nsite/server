@@ -1199,6 +1199,19 @@ void buf_pool_t::close()
   field_ref_zero= nullptr;
 }
 
+/** Initialize some adaptive hash index fields */
+static inline void buf_block_init_low(buf_block_t *block)
+{
+#ifdef BTR_CUR_HASH_ADAPT
+  /* No adaptive hash index entries may point to a previously unused
+  (and now freshly allocated) block. */
+  assert_block_ahi_empty_on_init(block);
+  block->next_left_bytes_fields= buf_block_t::LEFT_SIDE | 1;
+  block->n_hash_helps= 0;
+  block->index= nullptr;
+#endif /* BTR_CUR_HASH_ADAPT */
+}
+
 /** Try to reallocate a control block.
 @param block  control block to reallocate
 @return whether the reallocation succeeded */
@@ -1301,12 +1314,8 @@ inline bool buf_pool_t::realloc(buf_block_t *block)
 		/* This code should only be executed by resize(),
 		while the adaptive hash index is disabled. */
 		assert_block_ahi_empty(block);
-		assert_block_ahi_empty_on_init(new_block);
 		ut_ad(!block->index);
-		new_block->index	= NULL;
-		new_block->n_hash_helps	= 0;
-		new_block->n_fields	= 1;
-		new_block->left_side	= TRUE;
+		buf_block_init_low(new_block);
 #endif /* BTR_CUR_HASH_ADAPT */
 		ut_d(block->page.set_state(buf_page_t::MEMORY));
 		/* free block */
@@ -2321,27 +2330,6 @@ must_read_page:
                 << " failed with error: " << err;
     return nullptr;
   }
-}
-
-/********************************************************************//**
-Initialize some fields of a control block. */
-UNIV_INLINE
-void
-buf_block_init_low(
-/*===============*/
-	buf_block_t*	block)	/*!< in: block to init */
-{
-#ifdef BTR_CUR_HASH_ADAPT
-	/* No adaptive hash index entries may point to a previously
-	unused (and now freshly allocated) block. */
-	assert_block_ahi_empty_on_init(block);
-	block->index		= NULL;
-
-	block->n_hash_helps	= 0;
-	block->n_fields		= 1;
-	block->n_bytes		= 0;
-	block->left_side	= TRUE;
-#endif /* BTR_CUR_HASH_ADAPT */
 }
 
 /********************************************************************//**

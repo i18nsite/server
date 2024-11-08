@@ -655,14 +655,13 @@ struct btr_path_t {
 
 /** Values for the flag documenting the used search method */
 enum btr_cur_method {
-	BTR_CUR_HASH = 1,	/*!< successful shortcut using
+	BTR_CUR_BINARY,		/*!< success using the binary search */
+#ifdef BTR_CUR_HASH_ADAPT
+	BTR_CUR_HASH,		/*!< successful shortcut using
 				the hash index */
 	BTR_CUR_HASH_FAIL,	/*!< failure using hash, success using
-				binary search: the misleading hash
-				reference is stored in the field
-				hash_node, and might be necessary to
-				update */
-	BTR_CUR_BINARY,		/*!< success using the binary search */
+				binary search */
+#endif
 	BTR_CUR_INSERT_TO_IBUF,	/*!< performed the intended insert to
 				the insert buffer */
 	BTR_CUR_DEL_MARK_IBUF,	/*!< performed the intended delete
@@ -721,10 +720,7 @@ struct btr_cur_t {
 					only used internally in searches: not
 					defined after the search */
 #ifdef BTR_CUR_HASH_ADAPT
-	uint16_t	n_fields;	/*!< prefix length used in a hash
-					search if hash_node != NULL */
-	uint16_t	n_bytes;	/*!< hash prefix bytes if hash_node !=
-					NULL */
+	uint32_t	n_bytes_fields;	/*!< prefix used in a hash search */
 	uint32_t	fold;		/*!< fold value used in the search if
 					flag is BTR_CUR_HASH */
 #endif

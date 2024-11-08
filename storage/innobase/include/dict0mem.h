@@ -1084,66 +1084,56 @@ struct dict_index_t {
 	UT_LIST_NODE_T(dict_index_t)
 			indexes;/*!< list of indexes of the table */
 #ifdef BTR_CUR_ADAPT
-	/** The search info struct in an index */
-	struct ahi {
-		ahi() = default;
-		ahi(const ahi&) = default;
-		~ahi() = default;
-		ahi& operator=(const ahi&) { new(this) ahi(); return *this; }
-		/** the root page when it was last time fetched, or nullptr */
-		buf_block_t* root_guess = nullptr;
+  /** The search info struct in an index */
+  struct ahi {
+    ahi()= default;
+    ahi(const ahi&)= default;
+    ~ahi()= default;
+    ahi& operator=(const ahi&) { new(this) ahi(); return *this; }
+    /** the root page when it was last time fetched, or nullptr */
+    buf_block_t *root_guess= nullptr;
 # ifdef BTR_CUR_HASH_ADAPT
-	private:
-		/** After change in n_fields or n_bytes, this
-		many rounds are waited before starting the hash
-		analysis again: this is to save CPU time when there is
-		no hope in building a hash index. */
-		static constexpr uint8_t HASH_ANALYSIS= 16;
-		/** the number of calls to hash_analysis_useful() */
-		Atomic_relaxed<uint8_t> hash_analysis{0};
-	public:
-		bool hash_analysis_useful() noexcept
-		{
-			return hash_analysis > HASH_ANALYSIS ||
-				hash_analysis.fetch_add(1) >= HASH_ANALYSIS;
-		}
-		void hash_analysis_reset() noexcept { hash_analysis= 0; }
+  private:
+    /** After change in n_fields or n_bytes, this many rounds are
+    waited before starting the hash analysis again: this is to save
+    CPU time when there is no hope in building a hash index. */
+    static constexpr uint8_t HASH_ANALYSIS= 16;
+    /** the number of calls to hash_analysis_useful() */
+    Atomic_relaxed<uint8_t> hash_analysis{0};
+  public:
+    bool hash_analysis_useful() noexcept
+    {
+      return hash_analysis > HASH_ANALYSIS ||
+        hash_analysis.fetch_add(1) >= HASH_ANALYSIS;
+    }
+    void hash_analysis_reset() noexcept { hash_analysis= 0; }
 
-		/** number of consecutive searches which would have
-		succeeded, or did succeed, using the hash index; the
-		range is 0 .. BTR_SEARCH_BUILD_LIMIT + 5 */
-		uint8_t	n_hash_potential = 0;
+    /** number of consecutive searches which would have succeeded, or
+    did succeed, using the hash index; the range is 0
+    .. BTR_SEARCH_BUILD_LIMIT + 5 */
+    Atomic_relaxed<uint8_t> n_hash_potential{0};
 
-		/** whether the last search would have succeeded, or
-		did succeed, using the hash index; NOTE that the value
-		here is not exact: it is not calculated for every
-		search, and the calculation itself is not always accurate! */
-		bool	last_hash_succ = false;
+    /** whether the last search would have succeeded, or
+    did succeed, using the hash index; NOTE that the value
+    here is not exact: it is not calculated for every
+    search, and the calculation itself is not always accurate! */
+    Atomic_relaxed<bool> last_hash_succ{false};
 
-		/** recommended full field prefix */
-		uint16_t n_fields =1;
-		/** recommended number of bytes in an incomplete field */
-		uint16_t n_bytes = 0;
-
-		/** whether the leftmost record of several records
-		with the same prefix should be indexed */
-		bool left_side = true;
-
-		/** Number of blocks in this index tree
-		that have search index built i.e. block->index points to this
-		index. */
-		Atomic_counter<ulint> ref_count;
+    /** recommended parameters; @see buf_block_t::left_bytes_fields */
+    Atomic_relaxed<uint32_t> left_bytes_fields{buf_block_t::LEFT_SIDE | 1};
+    /** number of buf_block_t::index pointers to this index */
+    Atomic_counter<ulint> ref_count{0};
 
 #  ifdef UNIV_SEARCH_PERF_STAT
-		/** number of successful hash searches */
-		ulint	n_hash_succ=0;
-		/** number of failed hash searches */
-		ulint	n_hash_fail=0;
-		/** number of searches */
-		ulint	n_searches=0;
+    /** number of successful hash searches */
+    ulint n_hash_succ{0};
+    /** number of failed hash searches */
+    ulint n_hash_fail{0};
+    /** number of searches */
+    ulint n_searches={0};
 #  endif /* UNIV_SEARCH_PERF_STAT */
 # endif /* BTR_CUR_HASH_ADAPT */
-	} search_info;
+  } search_info;
 #endif /* BTR_CUR_ADAPT */
 	row_log_t*	online_log;
 				/*!< the log of modifications

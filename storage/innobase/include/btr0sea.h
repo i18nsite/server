@@ -83,12 +83,9 @@ from the buffer pool or freed in a file, or the index is being dropped.
 void btr_search_drop_page_hash_when_freed(const page_id_t page_id) noexcept;
 
 /** Update the page hash index after a single record is inserted on a page.
-@param cursor cursor which was positioned before the inserted record */
-void btr_search_update_hash_node_on_insert(btr_cur_t *cursor) noexcept;
-
-/** Update the page hash index after a single record is inserted on a page.
-@param cursor cursor which was positioned before the inserted record */
-void btr_search_update_hash_on_insert(btr_cur_t *cursor) noexcept;
+@param cursor cursor which was positioned before the inserted record
+@param reorg  whether the page was reorganized */
+void btr_search_update_hash_on_insert(btr_cur_t *cursor, bool reorg) noexcept;
 
 /** Updates the page hash index before a single record is deleted from a page.
 @param cursor   cursor positioned on the to-be-deleted record */

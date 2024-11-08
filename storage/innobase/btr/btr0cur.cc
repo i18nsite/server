@@ -2644,13 +2644,8 @@ fail_err:
 		ut_ad(entry->is_metadata());
 		ut_ad(index->is_instant());
 		ut_ad(flags == BTR_NO_LOCKING_FLAG);
-	} else if (index->table->is_temporary()) {
-	} else {
-		if (!reorg && cursor->flag == BTR_CUR_HASH) {
-			btr_search_update_hash_node_on_insert(cursor);
-		} else {
-			btr_search_update_hash_on_insert(cursor);
-		}
+	} else if (!index->table->is_temporary()) {
+		btr_search_update_hash_on_insert(cursor, reorg);
 	}
 #endif /* BTR_CUR_HASH_ADAPT */
 
@@ -2840,9 +2835,8 @@ btr_cur_pessimistic_insert(
 			ut_ad(index->is_instant());
 			ut_ad(flags & BTR_NO_LOCKING_FLAG);
 			ut_ad(!(flags & BTR_CREATE_FLAG));
-		} else if (index->table->is_temporary()) {
-		} else {
-			btr_search_update_hash_on_insert(cursor);
+		} else if (!index->table->is_temporary()) {
+			btr_search_update_hash_on_insert(cursor, false);
 		}
 #endif /* BTR_CUR_HASH_ADAPT */
 		if (inherit && !(flags & BTR_NO_LOCKING_FLAG)) {

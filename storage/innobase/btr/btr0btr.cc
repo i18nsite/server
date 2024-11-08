@@ -597,8 +597,8 @@ buf_block_t *btr_root_block_sx(dict_index_t *index, mtr_t *mtr, dberr_t *err)
       return root;
   }
 #ifdef BTR_CUR_HASH_ADAPT
-  else
-    ut_ad(!root->index || !root->index->freed());
+  ut_d(else if (dict_index_t *index= root->index))
+    ut_ad(!index->freed());
 #endif
   return root;
 }

@@ -1292,8 +1292,10 @@ row_search_index_entry(
 	case BTR_CUR_INSERT_TO_IBUF:
 		return(ROW_BUFFERED);
 
+#ifdef BTR_CUR_HASH_ADAPT
 	case BTR_CUR_HASH:
 	case BTR_CUR_HASH_FAIL:
+#endif
 	case BTR_CUR_BINARY:
 		break;
 	}
