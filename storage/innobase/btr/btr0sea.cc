@@ -478,8 +478,9 @@ static void btr_search_info_update_hash(const btr_cur_t *cursor)
 
 	if (info->n_fields >= n_unique && cursor->up_match >= n_unique) {
 increment_potential:
-		info->n_hash_potential++;
-
+		if (info->n_hash_potential < BTR_SEARCH_BUILD_LIMIT + 5) {
+			info->n_hash_potential++;
+		}
 		return;
 	}
 
@@ -505,26 +506,20 @@ set_new_recomm:
 	info->hash_analysis_reset();
 
 	cmp = up_cmp - low_cmp;
-	info->left_side = cmp >= 0;
 	info->n_hash_potential = cmp != 0;
+	info->left_side = cmp >= 0;
+	info->n_bytes = 0;
 
-	if (cmp == 0) {
+	if (!info->n_hash_potential) {
 		/* For extra safety, we set some sensible values here */
 		info->n_fields = 1;
-		info->n_bytes = 0;
-	} else if (cmp > 0) {
-		info->n_hash_potential = 1;
-
+		info->left_side = true;
+	} else if (info->left_side) {
 		if (cursor->up_match >= n_unique) {
-
 			info->n_fields = n_unique;
-			info->n_bytes = 0;
-
 		} else if (cursor->low_match < cursor->up_match) {
-
 			info->n_fields = static_cast<uint16_t>(
 				cursor->low_match + 1);
-			info->n_bytes = 0;
 		} else {
 			info->n_fields = static_cast<uint16_t>(
 				cursor->low_match);
@@ -533,14 +528,10 @@ set_new_recomm:
 		}
 	} else {
 		if (cursor->low_match >= n_unique) {
-
 			info->n_fields = n_unique;
-			info->n_bytes = 0;
 		} else if (cursor->low_match > cursor->up_match) {
-
 			info->n_fields = static_cast<uint16_t>(
 				cursor->up_match + 1);
-			info->n_bytes = 0;
 		} else {
 			info->n_fields = static_cast<uint16_t>(
 				cursor->up_match);
@@ -1106,12 +1097,13 @@ btr_search_guess_on_hash(
 {
 	ut_ad(mtr->is_active());
 	ut_ad(index->is_btree() || index->is_ibuf());
+	ut_ad(latch_mode == BTR_SEARCH_LEAF || latch_mode == BTR_MODIFY_LEAF);
+	ut_ad(mode == PAGE_CUR_LE || mode == PAGE_CUR_GE);
 
 	/* Note that, for efficiency, the search_info may not be protected by
 	any latch here! */
 
-	if (latch_mode > BTR_MODIFY_LEAF
-	    || !index->search_info.last_hash_succ
+	if (!index->search_info.last_hash_succ
 	    || !index->search_info.n_hash_potential
 	    || (tuple->info_bits & REC_INFO_MIN_REC_FLAG)) {
 		return false;
@@ -1120,7 +1112,6 @@ btr_search_guess_on_hash(
 	ut_ad(index->is_btree());
         ut_ad(!index->table->is_temporary());
 
-	ut_ad(latch_mode == BTR_SEARCH_LEAF || latch_mode == BTR_MODIFY_LEAF);
 	compile_time_assert(ulint{BTR_SEARCH_LEAF} == ulint{RW_S_LATCH});
 	compile_time_assert(ulint{BTR_MODIFY_LEAF} == ulint{RW_X_LATCH});
 
@@ -1191,7 +1182,7 @@ found:
 	}
 
 	if (!got_latch) {
-		goto ahi_release_and_fail;
+		goto ahi_release_and_fail; // FIXME: no BTR_CUR_HASH_FAIL
 	}
 
 	const auto state = block->page.state();

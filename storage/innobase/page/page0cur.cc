@@ -686,68 +686,37 @@ static int cmp_dtuple_rec(const dtuple_t &dtuple, const rec_t *rec,
 bool btr_cur_t::check_mismatch(const dtuple_t& tuple, page_cur_mode_t mode,
                                ulint comp) noexcept
 {
+  ut_ad(mode == PAGE_CUR_LE || mode == PAGE_CUR_GE);
+  ut_ad(page_is_leaf(page_cur.block->page.frame));
+  ut_ad(page_rec_is_user_rec(page_cur.rec));
+
   const rec_t *rec= page_cur.rec;
   uint16_t match= 0;
-  ut_ad(page_is_leaf(page_cur.block->page.frame));
   int cmp= cmp_dtuple_rec(tuple, rec, *index(), &match, comp);
+  const auto uniq= dict_index_get_n_unique_in_tree(index());
+  ut_ad(match <= uniq);
+  ut_ad(match <= tuple.n_fields_cmp);
+  ut_ad(match < uniq || !cmp);
 
-  switch (mode) {
-    const rec_t *other;
-    const page_t *page;
-  case PAGE_CUR_GE:
-    if (cmp > 0)
-      return true;
-    up_match= match;
-    if (match >= dict_index_get_n_unique_in_tree(index()))
-      return false;
-    goto check_ge;
-  case PAGE_CUR_G:
-    if (cmp >= 0)
-      return true;
-  check_ge:
-    match= 0;
-    if (!(other= page_rec_get_prev_const(rec)))
-      return true;
-    page= page_cur.block->page.frame;
-    if (uintptr_t(other - page) ==
-        (comp ? PAGE_NEW_INFIMUM : PAGE_OLD_INFIMUM))
-      return page_has_prev(page);
-    if (UNIV_LIKELY(comp != 0))
-      switch (rec_get_status(other)) {
-      case REC_STATUS_INSTANT:
-      case REC_STATUS_ORDINARY:
-        break;
-      default:
-        return true;
-      }
-    cmp= cmp_dtuple_rec(tuple, other, *index(), &match, comp);
-    return (mode == PAGE_CUR_GE) ? cmp <= 0 : cmp < 0;
-  case PAGE_CUR_LE:
+  const page_t *const page= page_cur.block->page.frame;
+
+  if (UNIV_LIKELY(mode == PAGE_CUR_LE))
+  {
     if (cmp < 0)
       return true;
     low_match= match;
-    goto check_le;
-  case PAGE_CUR_L:
-    if (cmp <= 0)
-      return true;
-  check_le:
-    match= 0;
-    ut_ad(!page_rec_is_supremum(rec));
-    page= page_cur.block->page.frame;
+    up_match= 0;
     if (UNIV_LIKELY(comp != 0))
     {
-      other= page_rec_next_get<true>(page, rec);
-      if (!other)
+      rec= page_rec_next_get<true>(page, rec);
+      if (!rec)
         return true;
-      if (other - page == PAGE_NEW_SUPREMUM)
-      {
+      if (uintptr_t(rec - page) == PAGE_NEW_SUPREMUM)
       le_supremum:
-        if (page_has_next(page))
-          return true;
-        up_match= 0;
-        return false;
-      }
-      switch (rec_get_status(other)) {
+        /* If we matched the full key at the end of a page (but not the index),
+        the adaptive hash index was successful. */
+        return page_has_next(page) && match < uniq;
+      switch (rec_get_status(rec)) {
       case REC_STATUS_INSTANT:
       case REC_STATUS_ORDINARY:
         break;
@@ -757,20 +726,36 @@ bool btr_cur_t::check_mismatch(const dtuple_t& tuple, page_cur_mode_t mode,
     }
     else
     {
-      other= page_rec_next_get<false>(page, rec);
-      if (!other)
+      rec= page_rec_next_get<false>(page, rec);
+      if (!rec)
         return true;
-      if (other - page == PAGE_OLD_SUPREMUM)
+      if (uintptr_t(rec - page) == PAGE_OLD_SUPREMUM)
         goto le_supremum;
     }
-    cmp= cmp_dtuple_rec(tuple, other, *index(), &match, comp);
-    if (mode != PAGE_CUR_LE)
-      return cmp > 0;
+    return cmp_dtuple_rec(tuple, rec, *index(), &up_match, comp) >= 0;
+  }
+  else
+  {
+    ut_ad(mode == PAGE_CUR_GE);
+    if (cmp > 0)
+      return true;
     up_match= match;
-    return cmp >= 0;
-  default:
-    ut_ad("invalid mode" == 0);
-    return true;
+    if (match >= uniq)
+      return false;
+    match= 0;
+    if (!(rec= page_rec_get_prev_const(rec)))
+      return true;
+    if (uintptr_t(rec - page) == (comp ? PAGE_NEW_INFIMUM : PAGE_OLD_INFIMUM))
+      return page_has_prev(page);
+    if (UNIV_LIKELY(comp != 0))
+      switch (rec_get_status(rec)) {
+      case REC_STATUS_INSTANT:
+      case REC_STATUS_ORDINARY:
+        break;
+      default:
+        return true;
+      }
+    return cmp_dtuple_rec(tuple, rec, *index(), &match, comp) <= 0;
   }
 }
 #endif /* BTR_CUR_HASH_ADAPT */
