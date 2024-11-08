@@ -1768,9 +1768,9 @@ dberr_t btr_cur_t::pessimistic_search_leaf(const dtuple_t *tuple,
       err= DB_CORRUPTION;
     else
     {
-      ut_ad(up_match != ULINT_UNDEFINED || mode != PAGE_CUR_GE);
-      ut_ad(up_match != ULINT_UNDEFINED || mode != PAGE_CUR_LE);
-      ut_ad(low_match != ULINT_UNDEFINED || mode != PAGE_CUR_LE);
+      ut_ad(up_match != uint16_t(~0U) || mode != PAGE_CUR_GE);
+      ut_ad(up_match != uint16_t(~0U) || mode != PAGE_CUR_LE);
+      ut_ad(low_match != uint16_t(~0U) || mode != PAGE_CUR_LE);
 
 #ifdef BTR_CUR_HASH_ADAPT
       /* We do a dirty read of btr_search.enabled here.  We will recheck in
