@@ -2908,6 +2908,8 @@ end:
   DBUG_RETURN(error);
 }
 
+/** `--binlog_error_action`, one of enum_binlog_error_action (`sql/mysqld.h`) */
+ulong binlog_error_action;
 
 bool MYSQL_LOG::init_and_set_log_file_name(const char *log_name,
                                            const char *new_name,

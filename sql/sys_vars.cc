@@ -1,5 +1,5 @@
 /* Copyright (c) 2002, 2015, Oracle and/or its affiliates.
-   Copyright (c) 2012, 2022, MariaDB Corporation.
+   Copyright (c) 2012, 2024, MariaDB Corporation.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -1569,6 +1569,16 @@ Sys_log_bin_compress_min_len(
   "that can be compressed",
   GLOBAL_VAR(opt_bin_log_compress_min_len),
   CMD_LINE(OPT_ARG), VALID_RANGE(10, 1024), DEFAULT(256), BLOCK_SIZE(1));
+
+static const char *binlog_error_action_list[]=
+  {"IGNORE_ERROR", "ABORT_SERVER", NullS};
+static Sys_var_enum Sys_binlog_error_action(
+       "binlog_error_action",
+       "When statements cannot be written to the binary log due to a fatal "
+       "error, the server can either ignore the error and let the primary "
+       "continue, or abort",
+       GLOBAL_VAR(binlog_error_action), CMD_LINE(REQUIRED_ARG),
+       binlog_error_action_list, DEFAULT(IGNORE_ERROR));
 
 static Sys_var_on_access_global<Sys_var_mybool,
                     PRIV_SET_SYSTEM_GLOBAL_VAR_LOG_BIN_TRUST_FUNCTION_CREATORS>
