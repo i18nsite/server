@@ -32,6 +32,9 @@ Created 10/4/1994 Heikki Tuuri
 #include "log0recv.h"
 #include "rem0cmp.h"
 #include "gis0rtree.h"
+#ifdef UNIV_DEBUG
+# include "trx0roll.h"
+#endif
 
 /** Get the pad character code point for a type.
 @param type
@@ -540,9 +543,13 @@ static int cmp_dtuple_rec(const dtuple_t &dtuple, const rec_t *rec,
   ut_ad(cur_field <= dtuple.n_fields_cmp);
   ut_ad(leaf == page_rec_is_leaf(rec));
   ut_ad(!leaf || !(rec_get_info_bits(rec, comp) & REC_INFO_MIN_REC_FLAG) ||
-        index.is_instant());
+        index.is_instant() ||
+        (index.is_primary() && trx_roll_crash_recv_trx &&
+         !trx_rollback_is_active));
   ut_ad(!leaf || !(dtuple.info_bits & REC_INFO_MIN_REC_FLAG) ||
-        index.is_instant());
+        index.is_instant() ||
+        (index.is_primary() && trx_roll_crash_recv_trx &&
+         !trx_rollback_is_active));
   ut_ad(leaf || !index.is_spatial() ||
         dtuple.n_fields_cmp == DICT_INDEX_SPATIAL_NODEPTR_SIZE + 1);
   int ret= 0;
