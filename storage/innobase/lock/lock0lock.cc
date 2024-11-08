@@ -4373,19 +4373,7 @@ released:
 					g.cell(), first_lock, heap_no);
 }
 
-struct lock_storage_t {
-  const lock_t *m_lock_p;
-  lock_t m_lock_copy;
-  byte m_bitmap[128];
-  lock_storage_t(const lock_t *lock) : m_lock_p(lock), m_lock_copy(*lock) {
-    std::memcpy(m_bitmap, lock + 1,
-           std::min(lock_rec_get_n_bits(lock)/8,
-                    sizeof(m_bitmap) / sizeof(m_bitmap[0])));
-  }
-};
-
-static void lock_rec_queue_validate(const lock_t *lock,
-                                    std::vector<lock_storage_t> &queue_copy);
+static void lock_rec_queue_validate(const lock_t *lock);
 
 /** Release the explicit locks of a committing transaction,
 and release possible other transactions waiting because of these locks.
@@ -4438,10 +4426,9 @@ restart:
         all_released= false;
       else
       {
-        std::vector<lock_storage_t> q1, q2;
-        lock_rec_queue_validate(lock, q1);
+        lock_rec_queue_validate(lock);
         lock_rec_dequeue_from_page(lock, false);
-        lock_rec_queue_validate(lock, q2);
+        lock_rec_queue_validate(lock);
         latch->release();
       }
     }
@@ -5480,8 +5467,7 @@ func_exit:
 	goto func_exit;
 }
 
-static void lock_rec_queue_validate(const lock_t *lock,
-                                    std::vector<lock_storage_t> &queue_copy)
+static void lock_rec_queue_validate(const lock_t *lock)
 {
   auto page_id= lock->un_member.rec_lock.page_id;
   auto cell= lock_sys.rec_hash.cell_get(page_id.fold());
@@ -5496,7 +5482,6 @@ static void lock_rec_queue_validate(const lock_t *lock,
          checked_lock != NULL;
          checked_lock= lock_rec_get_next_const(heap_no, checked_lock))
     {
-      queue_copy.emplace_back(checked_lock);
       if (checked_lock->is_waiting())
       {
         ut_a(checked_lock->is_gap() ||
