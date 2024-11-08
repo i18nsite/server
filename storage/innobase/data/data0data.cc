@@ -606,8 +606,8 @@ dtuple_convert_big_rec(
 	ulint longest;
 
 	const bool mblob = entry->is_alter_metadata();
-	ut_ad(entry->n_fields - mblob >= index->first_user_field());
-	ut_ad(entry->n_fields - mblob <= index->n_fields);
+	ut_ad(unsigned(entry->n_fields - mblob) >= index->first_user_field());
+	ut_ad(unsigned(entry->n_fields - mblob) <= index->n_fields);
 
 	if (mblob) {
 		longest_i = index->first_user_field();

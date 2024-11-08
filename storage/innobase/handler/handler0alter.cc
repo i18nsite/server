@@ -4686,11 +4686,9 @@ innobase_build_col_map(
 	DBUG_ENTER("innobase_build_col_map");
 	DBUG_ASSERT(altered_table != table);
 	DBUG_ASSERT(new_table != old_table);
-	DBUG_ASSERT(dict_table_get_n_cols(new_table)
-		    + dict_table_get_n_v_cols(new_table)
+	DBUG_ASSERT(unsigned(new_table->n_cols + new_table->n_v_cols)
 		    >= altered_table->s->fields + DATA_N_SYS_COLS);
-	DBUG_ASSERT(dict_table_get_n_cols(old_table)
-		    + dict_table_get_n_v_cols(old_table)
+	DBUG_ASSERT(unsigned(old_table->n_cols + old_table->n_v_cols)
 		    >= table->s->fields + DATA_N_SYS_COLS
 		    || ha_innobase::omits_virtual_cols(*table->s));
 	DBUG_ASSERT(!!defaults == !!(ha_alter_info->handler_flags
