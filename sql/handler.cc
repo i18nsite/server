@@ -9258,11 +9258,11 @@ int check_record_reference(const TABLE *table, const TABLE *ref_table,
     if (this_key->key_part[kp].field->is_real_null())
       return 0;
 
-  key_copy(key_buf, this_record, this_key, prefix_length, false);
+  key_copy(key_buf, this_record, this_key, ref_key, prefix_length, false);
 
-  key_part_map kp_map((1 << fk_parts) - 1);
   int error= ref_table->file->ha_index_read_map(ref_record, key_buf,
-                                                kp_map, HA_READ_KEY_EXACT);
+                                                make_keypart_map(fk_parts),
+                                                HA_READ_KEY_EXACT);
 
   if (error)
   {
@@ -9287,7 +9287,7 @@ int check_key_referential_integrity(const TABLE *table, const TABLE *ref_table,
   if (error)
     return error;
 
-  uint prefix_length= key_prefix_store_length(this_key, fk_parts);
+  uint prefix_length= key_prefix_store_length(ref_key, fk_parts);
 
   bool is_ok= true;
   while ((error= table->file->ha_rnd_next(table->record[0])) == 0)
@@ -9364,21 +9364,21 @@ int check_foreign_key_relations(THD *thd, TABLE *table)
 
   for (const FOREIGN_KEY_INFO &fk: fk_list)
   {
-    const KEY *key= find_key_by_name(table, *fk.foreign_key_name);
-    if (!key)
-      continue;
-    max_key_len= max(max_key_len,
-                     key_prefix_store_length(key, fk.foreign_fields.elements));
-  }
-
-  for (const FOREIGN_KEY_INFO &fk: parent_fk_list)
-  {
     const KEY *key= find_key_by_name(table, *fk.referenced_key_name);
     if (!key)
       continue;
     max_key_len= max(max_key_len,
+                     key_prefix_store_length(key, fk.referenced_fields.elements));
+  }
+
+  for (const FOREIGN_KEY_INFO &fk: parent_fk_list)
+  {
+    const KEY *key= find_key_by_name(table, *fk.foreign_key_name);
+    if (!key)
+      continue;
+    max_key_len= max(max_key_len,
                      key_prefix_store_length(key,
-                                             fk.referenced_fields.elements));
+                                             fk.foreign_fields.elements));
   }
 
   uchar *key_buf= (uchar*)thd->alloc(max_key_len);
