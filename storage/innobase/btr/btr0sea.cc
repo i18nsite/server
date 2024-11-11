@@ -845,12 +845,14 @@ index.
 @param cursor    B-tree cursor */
 static void btr_search_update_hash_ref(const btr_cur_t *cursor) noexcept
 {
-  ut_ad(cursor->flag == BTR_CUR_HASH_FAIL);
   buf_block_t *const block= cursor->page_cur.block;
   ut_ad(block->page.lock.have_x() || block->page.lock.have_s());
   ut_ad(page_align(btr_cur_get_rec(cursor)) == block->page.frame);
   ut_ad(page_is_leaf(block->page.frame));
   assert_block_ahi_valid(block);
+#ifdef UNIV_SEARCH_PERF_STAT
+  btr_search_n_hash_fail++;
+#endif /* UNIV_SEARCH_PERF_STAT */
 
   dict_index_t *index= block->index;
 
@@ -1098,7 +1100,6 @@ btr_search_guess_on_hash(
 	const uint32_t fold = dtuple_fold(tuple, cursor);
 
 	cursor->fold = fold;
-	cursor->flag = BTR_CUR_HASH;
 
 	btr_sea::partition& part = btr_search.get_part(*index);
 
@@ -1108,8 +1109,6 @@ btr_search_guess_on_hash(
 ahi_release_and_fail:
 		part.latch.rd_unlock();
 fail:
-		cursor->flag = BTR_CUR_HASH_FAIL;
-
 #ifdef UNIV_SEARCH_PERF_STAT
 		++index->search_info.n_hash_fail;
 		if (index->search_info.n_hash_succ > 0) {
@@ -1130,6 +1129,7 @@ fail:
 		}
 	}
 
+	cursor->flag = BTR_CUR_HASH_FAIL;
 	goto ahi_release_and_fail;
 
 found:
@@ -1138,7 +1138,6 @@ found:
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
 	ut_a(block == node->block);
 #endif
-	bool got_latch;
 	{
 		buf_pool_t::hash_chain& chain = buf_pool.page_hash.cell_get(
 			block->page.id().fold());
@@ -1148,25 +1147,24 @@ found:
 		block->page.can_relocate() will not cease to hold. */
 		transactional_shared_lock_guard<page_hash_latch> g{
 			buf_pool.page_hash.lock_get(chain)};
-		got_latch = (latch_mode == BTR_SEARCH_LEAF)
-			? block->page.lock.s_lock_try()
-			: block->page.lock.x_lock_try();
+		if (latch_mode == BTR_SEARCH_LEAF
+		    ? !block->page.lock.s_lock_try()
+		    : !block->page.lock.x_lock_try()) {
+			goto ahi_release_and_fail;
+		}
 	}
 
-	if (!got_latch) {
-		goto ahi_release_and_fail; // FIXME: no BTR_CUR_HASH_FAIL
-	}
-
+	part.latch.rd_unlock();
 	const auto state = block->page.state();
 	if (UNIV_UNLIKELY(state < buf_page_t::UNFIXED)) {
 		ut_ad(state == buf_page_t::REMOVE_HASH);
-block_and_ahi_release_and_fail:
+block_release_and_fail:
 		if (latch_mode == BTR_SEARCH_LEAF) {
 			block->page.lock.s_unlock();
 		} else {
 			block->page.lock.x_unlock();
 		}
-		goto ahi_release_and_fail;
+		goto fail;
 	}
 
 	ut_ad(state < buf_page_t::READ_FIX || state >= buf_page_t::WRITE_FIX);
@@ -1175,7 +1173,8 @@ block_and_ahi_release_and_fail:
 	const dict_index_t* block_index = block->index;
 	if (index != block_index && index_id == block_index->id) {
 		ut_a(block_index->freed());
-		goto block_and_ahi_release_and_fail;
+		cursor->flag = BTR_CUR_HASH_FAIL;
+		goto block_release_and_fail;
 	}
 
 	block->page.fix();
@@ -1185,8 +1184,6 @@ block_and_ahi_release_and_fail:
 	static_assert(ulint{MTR_MEMO_PAGE_X_FIX} == ulint{BTR_MODIFY_LEAF},
 		      "");
 
-	part.latch.rd_unlock();
-
 	++buf_pool.stat.n_page_gets;
 
 	mtr->memo_push(block, mtr_memo_type_t(latch_mode));
@@ -1195,15 +1192,16 @@ block_and_ahi_release_and_fail:
 	ut_ad(page_is_leaf(block->page.frame));
 
 	btr_cur_position(index, const_cast<rec_t*>(rec), block, cursor);
-	const auto comp = page_is_comp(block->page.frame);
+	const ulint comp{page_is_comp(block->page.frame)};
 	if (UNIV_LIKELY(comp != 0)) {
 		switch (rec_get_status(rec)) {
 		case REC_STATUS_INSTANT:
 		case REC_STATUS_ORDINARY:
 			break;
 		default:
-		corrupted:
+		mismatch:
 			mtr->release_last_page();
+			cursor->flag = BTR_CUR_HASH_FAIL;
 			goto fail;
 		}
 	}
@@ -1211,7 +1209,7 @@ block_and_ahi_release_and_fail:
 	/* Check the validity of the guess within the page */
 	if (index_id != btr_page_get_index_id(block->page.frame)
 	    || cursor->check_mismatch(*tuple, ge, comp)) {
-		goto corrupted;
+		goto mismatch;
 	}
 
         const auto n_hash_potential = index->search_info.n_hash_potential;
@@ -1221,6 +1219,7 @@ block_and_ahi_release_and_fail:
 	}
 
 	index->search_info.last_hash_succ = true;
+	cursor->flag = BTR_CUR_HASH;
 
 #ifdef UNIV_SEARCH_PERF_STAT
 	btr_search_n_succ++;
@@ -1591,13 +1590,8 @@ void btr_cur_t::search_info_update() const noexcept
     btr_search_update_block_hash_info(&index()->search_info, page_cur.block);
 
   if (flag == BTR_CUR_HASH_FAIL)
-  {
     /* Update the hash node reference, if appropriate */
-#ifdef UNIV_SEARCH_PERF_STAT
-    btr_search_n_hash_fail++;
-#endif /* UNIV_SEARCH_PERF_STAT */
     btr_search_update_hash_ref(this);
-  }
 
   if (build_index)
     btr_search_build_page_hash_index(index(), page_cur.block,
