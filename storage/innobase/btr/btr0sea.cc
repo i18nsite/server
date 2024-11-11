@@ -465,19 +465,17 @@ static void btr_search_info_update_hash(const btr_cur_t *cursor)
   {
     info.left_bytes_fields= buf_block_t::LEFT_SIDE | 1;
     info.hash_analysis_reset();
+  increment_potential:
+    if (n_hash_potential < BTR_SEARCH_BUILD_LIMIT + 5)
+      info.n_hash_potential= n_hash_potential + 1;
     return;
   }
 
   uint32_t left_bytes_fields{info.left_bytes_fields};
 
-  /* Test if the search would have succeeded using the recommended hash prefix */
+  /* Test if the search would have succeeded using the recommended prefix */
   if (uint16_t(left_bytes_fields) >= n_unique && cursor->up_match >= n_unique)
-  {
-increment_potential:
-    if (n_hash_potential < BTR_SEARCH_BUILD_LIMIT + 5)
-      info.n_hash_potential= n_hash_potential + 1;
-    return;
-  }
+    goto increment_potential;
 
   const bool left_side{!!(left_bytes_fields & buf_block_t::LEFT_SIDE)};
   const int info_cmp=
@@ -1141,10 +1139,14 @@ found:
 #if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
 	ut_a(block == node->block);
 #endif
-	buf_pool_t::hash_chain& chain = buf_pool.page_hash.cell_get(
-		block->page.id().fold());
 	bool got_latch;
 	{
+		buf_pool_t::hash_chain& chain = buf_pool.page_hash.cell_get(
+			block->page.id().fold());
+		/* We must hold the cell latch while attempting to
+		acquire block->page.lock, because
+		buf_LRU_block_remove_hashed() assumes that
+		block->page.can_relocate() will not cease to hold. */
 		transactional_shared_lock_guard<page_hash_latch> g{
 			buf_pool.page_hash.lock_get(chain)};
 		got_latch = (latch_mode == BTR_SEARCH_LEAF)
@@ -1348,7 +1350,8 @@ retry:
     ut_a(block->index == index);
   }
 
-  if ((block->next_left_bytes_fields ^ n_bytes_fields) & ~buf_block_t::LEFT_SIDE)
+  if ((block->curr_left_bytes_fields ^ n_bytes_fields) &
+      ~buf_block_t::LEFT_SIDE)
   {
     /* Someone else has meanwhile built a new hash index on the page,
     with different parameters */
@@ -1406,7 +1409,7 @@ void btr_search_drop_page_hash_when_freed(const page_id_t page_id) noexcept
   if (buf_block_t *block= buf_page_get_gen(page_id, 0, RW_X_LATCH, nullptr,
                                            BUF_PEEK_IF_IN_POOL, &mtr))
   {
-    if (dict_index_t *index= block->index)
+    if (IF_DBUG(dict_index_t *index=,) block->index)
     {
       /* In all our callers, the table handle should be open, or we
       should be in the process of dropping the table (preventing
@@ -1585,7 +1588,7 @@ exit_func:
 void btr_cur_t::search_info_update() const noexcept
 {
   btr_search_info_update_hash(this);
-  bool build_index=
+  const bool build_index=
     btr_search_update_block_hash_info(&index()->search_info, page_cur.block);
 
   if (flag == BTR_CUR_HASH_FAIL)
