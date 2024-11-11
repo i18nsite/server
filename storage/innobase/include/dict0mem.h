@@ -1110,7 +1110,7 @@ struct dict_index_t {
 
     /** number of consecutive searches which would have succeeded, or
     did succeed, using the hash index; the range is 0
-    .. BTR_SEARCH_BUILD_LIMIT + 5 */
+    .. BTR_SEARCH_BUILD_LIMIT */
     Atomic_relaxed<uint8_t> n_hash_potential{0};
 
     /** whether the last search would have succeeded, or

@@ -921,8 +921,12 @@ struct buf_block_t{
   /** flag: (true=first, false=last) identical-prefix key is included */
   static constexpr uint32_t LEFT_SIDE= 1U << 31;
 
-  /** LEFT_SIDE | prefix_bytes << 16 | prefix_fields */
-  Atomic_relaxed<uint32_t> next_left_bytes_fields; // FIXME: remove this
+  /** AHI parameters: LEFT_SIDE | prefix_bytes << 16 | prefix_fields.
+  Protected by the btr_sea::partition::latch and
+  (1) in_file(), and we are holding lock in any mode, or
+  (2) !is_read_fixed()&&(state()>=UNFIXED||state()==REMOVE_HASH). */
+  Atomic_relaxed<uint32_t> ahi_left_bytes_fields;
+
   /** counter which controls building of a new hash index for the page */
   Atomic_relaxed<uint16_t> n_hash_helps;
 # if defined UNIV_AHI_DEBUG || defined UNIV_DEBUG
@@ -943,12 +947,6 @@ struct buf_block_t{
   or nullptr if the page does not exist in the index.
   Protected by btr_sea::partition::latch. */
   Atomic_relaxed<dict_index_t*> index;
-
-  /** Like next_left_bytes_fields, but for the currently built index.
-  Protected by the btr_sea::partition::latch and
-  (1) in_file(), and we are holding lock in any mode, or
-  (2) !is_read_fixed()&&(state()>=UNFIXED||state()==REMOVE_HASH). */
-  Atomic_relaxed<uint32_t> curr_left_bytes_fields;
   /* @} */
 #else /* BTR_CUR_HASH_ADAPT */
 # define assert_block_ahi_empty(block) /* nothing */

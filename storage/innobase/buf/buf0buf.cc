@@ -1206,7 +1206,6 @@ static inline void buf_block_init_low(buf_block_t *block)
   /* No adaptive hash index entries may point to a previously unused
   (and now freshly allocated) block. */
   assert_block_ahi_empty_on_init(block);
-  block->next_left_bytes_fields= buf_block_t::LEFT_SIDE | 1;
   block->n_hash_helps= 0;
   block->index= nullptr;
 #endif /* BTR_CUR_HASH_ADAPT */
