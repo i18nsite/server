@@ -5377,5 +5377,13 @@ NULL
 DROP TABLE t;
 SET sql_mode=DEFAULT;
 #
+# MDEV-28652 SUBSTRING(str,pos,len) returns incorrect result in view (returns an empty string)
+#
+create view v1 as select substring('hello', 1, 4294967295);
+select * from v1;
+substring('hello', 1, 4294967295)
+hello
+drop view v1;
+#
 # End of 10.6 tests
 #
