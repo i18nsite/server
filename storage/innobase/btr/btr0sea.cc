@@ -1049,7 +1049,7 @@ and the function returns TRUE, then cursor->up_match and cursor->low_match
 both have sensible values.
 @param[in,out]	index		index
 @param[in]	tuple		logical record
-@param[in]	mode		PAGE_CUR_L, ....
+@param[in]	ge		false=PAGE_CUR_LE, true=PAGE_CUR_GE
 @param[in]	latch_mode	BTR_SEARCH_LEAF, ...
 @param[out]	cursor		tree cursor
 @param[in]	mtr		mini-transaction
@@ -1059,7 +1059,7 @@ bool
 btr_search_guess_on_hash(
 	dict_index_t*	index,
 	const dtuple_t*	tuple,
-	page_cur_mode_t	mode,
+	bool		ge,
 	btr_latch_mode	latch_mode,
 	btr_cur_t*	cursor,
 	mtr_t*		mtr) noexcept
@@ -1067,7 +1067,6 @@ btr_search_guess_on_hash(
 	ut_ad(mtr->is_active());
 	ut_ad(index->is_btree() || index->is_ibuf());
 	ut_ad(latch_mode == BTR_SEARCH_LEAF || latch_mode == BTR_MODIFY_LEAF);
-	ut_ad(mode == PAGE_CUR_LE || mode == PAGE_CUR_GE);
 
 	/* Note that, for efficiency, the search_info may not be protected by
 	any latch here! */
@@ -1211,7 +1210,7 @@ block_and_ahi_release_and_fail:
 
 	/* Check the validity of the guess within the page */
 	if (index_id != btr_page_get_index_id(block->page.frame)
-	    || cursor->check_mismatch(*tuple, mode, comp)) {
+	    || cursor->check_mismatch(*tuple, ge, comp)) {
 		goto corrupted;
 	}
 

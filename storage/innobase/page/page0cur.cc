@@ -683,10 +683,9 @@ static int cmp_dtuple_rec(const dtuple_t &dtuple, const rec_t *rec,
 }
 
 #ifdef BTR_CUR_HASH_ADAPT
-bool btr_cur_t::check_mismatch(const dtuple_t& tuple, page_cur_mode_t mode,
-                               ulint comp) noexcept
+bool btr_cur_t::check_mismatch(const dtuple_t &tuple, bool ge, ulint comp)
+  noexcept
 {
-  ut_ad(mode == PAGE_CUR_LE || mode == PAGE_CUR_GE);
   ut_ad(page_is_leaf(page_cur.block->page.frame));
   ut_ad(page_rec_is_user_rec(page_cur.rec));
 
@@ -700,7 +699,7 @@ bool btr_cur_t::check_mismatch(const dtuple_t& tuple, page_cur_mode_t mode,
 
   const page_t *const page= page_cur.block->page.frame;
 
-  if (UNIV_LIKELY(mode == PAGE_CUR_LE))
+  if (UNIV_LIKELY(!ge))
   {
     if (cmp < 0)
       return true;
@@ -736,7 +735,6 @@ bool btr_cur_t::check_mismatch(const dtuple_t& tuple, page_cur_mode_t mode,
   }
   else
   {
-    ut_ad(mode == PAGE_CUR_GE);
     if (cmp > 0)
       return true;
     up_match= match;
