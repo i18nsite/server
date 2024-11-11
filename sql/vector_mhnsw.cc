@@ -190,6 +190,7 @@ struct FVector
 
   /************* no-SIMD default ******************************************/
   DEFAULT_IMPLEMENTATION
+  __attribute__((noinline))
   static float dot_product(const int16_t *v1, const int16_t *v2, size_t len)
   {
     int64_t d= 0;
