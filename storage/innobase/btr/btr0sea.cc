@@ -644,7 +644,7 @@ func_exit:
   else if (UNIV_UNLIKELY(block_index != index))
   {
     ut_ad(block_index->id == index->id);
-    btr_search_drop_page_hash_index(block, false);
+    btr_search_drop_page_hash_index(block, nullptr);
   }
   else if (cursor.flag == BTR_CUR_HASH_FAIL)
     btr_search_update_hash_ref(cursor, block, left_bytes_fields);
@@ -1230,12 +1230,12 @@ block_release_and_fail:
 	return true;
 }
 
-void btr_search_drop_page_hash_index(buf_block_t *block, bool garbage_collect)
-  noexcept
+void btr_search_drop_page_hash_index(buf_block_t *block,
+                                     const dict_index_t *not_garbage) noexcept
 {
 retry:
   dict_index_t *index= block->index;
-  if (!index)
+  if (!index || index == not_garbage)
     return;
 
   ut_d(const auto state= block->page.state());
@@ -1271,8 +1271,12 @@ retry:
       goto retry;
     }
   }
-  else if (garbage_collect)
+  else if (not_garbage != nullptr)
+  {
+    ut_ad(!index || index == not_garbage ||
+          not_garbage == reinterpret_cast<dict_index_t*>(-1));
     goto unlock_and_return;
+  }
 
   assert_block_ahi_valid(block);
 
@@ -1411,14 +1415,11 @@ void btr_search_drop_page_hash_when_freed(const page_id_t page_id) noexcept
   if (buf_block_t *block= buf_page_get_gen(page_id, 0, RW_X_LATCH, nullptr,
                                            BUF_PEEK_IF_IN_POOL, &mtr))
   {
-    if (IF_DBUG(dict_index_t *index=,) block->index)
-    {
-      /* In all our callers, the table handle should be open, or we
-      should be in the process of dropping the table (preventing
-      eviction). */
-      DBUG_ASSERT(index->table->get_ref_count() || dict_sys.locked());
-      btr_search_drop_page_hash_index(block, false);
-    }
+    /* In all our callers, the table handle should be open, or we
+    should be in the process of dropping the table (preventing eviction). */
+    ut_d(if (dict_index_t *i= block->index))
+      ut_ad(i->table->get_ref_count() || dict_sys.locked());
+    btr_search_drop_page_hash_index(block, nullptr);
   }
 
   mtr.commit();
@@ -1463,7 +1464,7 @@ static void btr_search_build_page_hash_index(dict_index_t *index,
     return;
 
   if (rebuild)
-    btr_search_drop_page_hash_index(block, false);
+    btr_search_drop_page_hash_index(block, nullptr);
 
   const uint32_t n_bytes_fields{left_bytes_fields & ~buf_block_t::LEFT_SIDE};
 
@@ -1612,7 +1613,7 @@ void btr_search_move_or_delete_hash_entries(buf_block_t *new_block,
   {
     ut_ad(!index || index == new_block_index);
 drop_exit:
-    btr_search_drop_page_hash_index(block, false);
+    btr_search_drop_page_hash_index(block, nullptr);
     return;
   }
 
@@ -1658,7 +1659,7 @@ void btr_search_update_hash_on_delete(btr_cur_t *cursor) noexcept
 
   if (UNIV_UNLIKELY(index != cursor->index()))
   {
-    btr_search_drop_page_hash_index(block, false);
+    btr_search_drop_page_hash_index(block, nullptr);
     return;
   }
 
@@ -1716,7 +1717,7 @@ void btr_search_update_hash_on_insert(btr_cur_t *cursor, bool reorg) noexcept
   {
     ut_ad(index->id == cursor->index()->id);
   drop:
-    btr_search_drop_page_hash_index(block, false);
+    btr_search_drop_page_hash_index(block, nullptr);
     return;
   }
 

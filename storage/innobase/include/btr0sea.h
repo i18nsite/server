@@ -67,15 +67,11 @@ void btr_search_move_or_delete_hash_entries(buf_block_t *new_block,
                                             buf_block_t *block) noexcept;
 
 /** Drop any adaptive hash index entries that point to an index page.
-@param[in,out]	block	block containing index page, s- or x-latched, or an
-			index page for which we know that
-			block->buf_fix_count == 0 or it is an index page which
-			has already been removed from the buf_pool.page_hash
-			i.e.: it is in state BUF_BLOCK_REMOVE_HASH
-@param[in]	garbage_collect	drop ahi only if the index is marked
-				as freed */
-void btr_search_drop_page_hash_index(buf_block_t* block,
-				     bool garbage_collect) noexcept;
+@param block        latched block containing index page, or a buffer-unfixed
+                    index page or a block in state BUF_BLOCK_REMOVE_HASH
+@param not_garbage  drop only if the index is set and NOT this */
+void btr_search_drop_page_hash_index(buf_block_t *block,
+                                     const dict_index_t *not_garbage) noexcept;
 
 /** Drop possible adaptive hash index entries when a page is evicted
 from the buffer pool or freed in a file, or the index is being dropped.
@@ -216,7 +212,7 @@ extern ulint	btr_search_n_hash_fail;
 #else /* BTR_CUR_HASH_ADAPT */
 # define btr_search_sys_create()
 # define btr_search_sys_free()
-# define btr_search_drop_page_hash_index(block, garbage_collect)
+# define btr_search_drop_page_hash_index(block, not_garbage)
 # define btr_search_s_lock_all(index)
 # define btr_search_s_unlock_all(index)
 # define btr_search_move_or_delete_hash_entries(new_block, block)
