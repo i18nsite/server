@@ -211,6 +211,9 @@ Event_parse_data::init_execute_at(THD *thd)
   if (item_execute_at->fix_fields(thd, &item_execute_at))
     goto wrong_value;
 
+  if (item_execute_at->check_cols(1))
+    DBUG_RETURN(ER_WRONG_VALUE);
+
   /* no starts and/or ends in case of execute_at */
   DBUG_PRINT("info", ("starts_null && ends_null should be 1 is %d",
                       (starts_null && ends_null)));
@@ -280,6 +283,9 @@ Event_parse_data::init_interval(THD *thd)
 
   if (item_expression->fix_fields(thd, &item_expression))
     goto wrong_value;
+
+  if (item_expression->check_cols(1))
+   DBUG_RETURN(ER_WRONG_VALUE);
 
   if (get_interval_value(thd, item_expression, interval, &interval_tmp))
     goto wrong_value;
@@ -384,6 +390,9 @@ Event_parse_data::init_starts(THD *thd)
   if (item_starts->fix_fields(thd, &item_starts))
     goto wrong_value;
 
+  if (item_starts->check_cols(1))
+    DBUG_RETURN(ER_WRONG_VALUE);
+
   if (item_starts->get_date(thd, &ltime, TIME_NO_ZERO_DATE |
                                          thd->temporal_round_mode()))
     goto wrong_value;
@@ -438,6 +447,9 @@ Event_parse_data::init_ends(THD *thd)
 
   if (item_ends->fix_fields(thd, &item_ends))
     goto error_bad_params;
+
+  if (item_ends->check_cols(1))
+    DBUG_RETURN(EVEX_BAD_PARAMS);
 
   DBUG_PRINT("info", ("convert to TIME"));
   if (item_ends->get_date(thd, &ltime, TIME_NO_ZERO_DATE |
