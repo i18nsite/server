@@ -647,9 +647,9 @@ def move_back():
   if opts.rocksdb_datadir is None or opts.rocksdb_waldir is None or opts.backupdir is None or opts.datadir is None:
     print_move_back_usage()
     sys.exit()
+  create_moveback_dir(opts.rocksdb_waldir)
   create_moveback_dir(opts.datadir)
   create_moveback_dir(opts.rocksdb_datadir)
-  create_moveback_dir(opts.rocksdb_waldir)
 
   os.chdir(opts.backupdir)
   for f in os.listdir(opts.backupdir):
