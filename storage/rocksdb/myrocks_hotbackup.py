@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!@PYTHON_SHEBANG@
 
 from __future__ import division
 from optparse import OptionParser
@@ -21,13 +21,20 @@ import MySQLdb
 import MySQLdb.connections
 from MySQLdb import OperationalError, ProgrammingError
 
+if sys.version_info[0] == 2:
+  def decode(str):
+    return str
+else:
+  def decode(bytes):
+    return bytes.decode('utf-8')
+
 logger = None
 opts = None
 rocksdb_files = ['MANIFEST', 'CURRENT', 'OPTIONS']
 rocksdb_data_suffix = '.sst'
 rocksdb_wal_suffix = '.log'
-exclude_files = [b'master.info', b'relay-log.info', b'worker-relay-log.info',
-                 b'auto.cnf', b'gaplock.log', b'ibdata', b'ib_logfile', b'.trash']
+exclude_files = ['master.info', 'relay-log.info', 'worker-relay-log.info',
+                 'auto.cnf', 'gaplock.log', 'ibdata', 'ib_logfile', '.trash']
 wdt_bin = 'wdt'
 
 def is_manifest(fname):
@@ -56,9 +63,6 @@ class StreamWriter(Writer):
       raise Exception("Only tar or xbstream is supported as streaming option.")
 
   def write(self, file_name):
-    if isinstance(file_name, bytes):
-      file_name = file_name.decode('utf-8')
-
     rc= os.system(self.stream_cmd + " " + file_name)
     if (rc != 0):
       raise Exception("Got error on stream write: " + str(rc) + " " + file_name)
@@ -86,7 +90,7 @@ class MiscFilesProcessor():
     pass
 
   def check_frm_timestamp(self, fname, path):
-    if not self.skip_check_frm_timestamp and fname.endswith(b'.frm'):
+    if not self.skip_check_frm_timestamp and fname.endswith('.frm'):
       if os.path.getmtime(path) > self.start_backup_time:
         logger.error('FRM file %s was updated after starting backups. '
                      'Schema could have changed and the resulting copy may '
@@ -107,7 +111,7 @@ class MiscFilesProcessor():
           self.check_frm_timestamp(f, rel_path)
           self.process_file(rel_path)
     logger.info("Traversing misc files from data directory..")
-    for f in self.get_files(b""):
+    for f in self.get_files(""):
       should_skip = False
       for e in exclude_files:
         if f.startswith(e) or f.endswith(e):
@@ -118,7 +122,7 @@ class MiscFilesProcessor():
         self.process_file(f)
 
   def match(self, filename):
-    if self.regex.match(filename.decode('utf-8')):
+    if self.regex.match(filename):
       return True
     else:
       return False
@@ -128,12 +132,12 @@ class MiscFilesProcessor():
     dirs = [ d for d in os.listdir(self.datadir) \
             if not os.path.isfile(os.path.join(self.datadir,d))]
     for db in dirs:
-      if not db.startswith(b'.') and not self._is_socket(db) and not db == b"#rocksdb":
+      if not db.startswith('.') and not self._is_socket(db) and not db == "#rocksdb":
         dbs.append(db)
     return dbs
 
   def get_files(self, db):
-    dbdir = self.datadir + b"/" + db
+    dbdir = self.datadir + "/" + db
     return [ f for f in os.listdir(dbdir) \
             if os.path.isfile(os.path.join(dbdir,f))]
 
@@ -322,11 +326,13 @@ class MySQLUtil:
     if socket:
       dbh = MySQLdb.Connect(user=user,
                             passwd=password,
+                            charset='utf8',
                             unix_socket=socket)
     else:
       dbh = MySQLdb.Connect(user=user,
                             passwd=password,
                             port=port,
+                            charset='utf8',
                             host="127.0.0.1")
     return dbh
 
@@ -647,8 +653,8 @@ def move_back():
   if opts.rocksdb_datadir is None or opts.rocksdb_waldir is None or opts.backupdir is None or opts.datadir is None:
     print_move_back_usage()
     sys.exit()
-  create_moveback_dir(opts.rocksdb_waldir)
   create_moveback_dir(opts.datadir)
+  create_moveback_dir(opts.rocksdb_waldir)
   create_moveback_dir(opts.rocksdb_datadir)
 
   os.chdir(opts.backupdir)
