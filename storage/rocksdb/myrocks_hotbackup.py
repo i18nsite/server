@@ -268,7 +268,7 @@ class RocksDBBackup():
     start_time= time.time()
     last_progress_time= start_time
     progress_size= 0
-    for fname, size in self.target_sst.iteritems():
+    for fname, size in self.target_sst.items():
       self.do_backup_sst(fname, size)
       progress_size= progress_size + size
       elapsed_seconds = time.time() - start_time
