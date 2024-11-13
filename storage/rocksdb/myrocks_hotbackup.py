@@ -21,13 +21,6 @@ import MySQLdb
 import MySQLdb.connections
 from MySQLdb import OperationalError, ProgrammingError
 
-if sys.version_info[0] == 2:
-  def decode(str):
-    return str
-else:
-  def decode(bytes):
-    return bytes.decode('utf-8')
-
 logger = None
 opts = None
 rocksdb_files = ['MANIFEST', 'CURRENT', 'OPTIONS']
